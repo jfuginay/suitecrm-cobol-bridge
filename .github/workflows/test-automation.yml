@@ -173,7 +173,7 @@ jobs:
           TEST_TIMEOUT: 30000
 
       - name: Upload COBOL test reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: cobol-validation-report
           path: cobol-core/tests/output/cobol-validation-report.json
@@ -248,7 +248,7 @@ jobs:
           WS_URL: ws://localhost:3000
 
       - name: Upload integration test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: integration-test-results
@@ -301,7 +301,7 @@ jobs:
           WS_URL: ws://localhost:3000
 
       - name: Upload security test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-test-results
@@ -350,7 +350,7 @@ jobs:
           artillery report results.json --output results.html
 
       - name: Upload performance test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: performance-test-results
           path: tests/performance/results.*
@@ -445,7 +445,7 @@ jobs:
           API_BASE_URL: http://localhost:3000/api/v1
 
       - name: Upload E2E test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: playwright-report-${{ matrix.browser }}
@@ -488,7 +488,7 @@ jobs:
           node generate-test-report.js
 
       - name: Upload comprehensive test report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: comprehensive-test-report
           path: tests/reporting/output/
