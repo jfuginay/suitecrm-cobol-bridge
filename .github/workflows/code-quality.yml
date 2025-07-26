@@ -168,7 +168,7 @@ jobs:
       if: matrix.component.type == 'php'
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./${{ matrix.component.name }}/coverage/lcov.info
         flags: ${{ matrix.component.name }}
@@ -177,7 +177,7 @@ jobs:
       if: matrix.component.type != 'php'
 
     - name: Upload PHP coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./${{ matrix.component.name }}/coverage.xml
         flags: ${{ matrix.component.name }}
@@ -286,7 +286,7 @@ jobs:
         fi
 
     - name: Upload merged coverage
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: merged-coverage/merged-lcov.info
         flags: merged
