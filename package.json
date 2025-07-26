@@ -87,7 +87,7 @@
     "lint-staged": "^15.0.0",
     "nyc": "^15.1.0",
     "prettier": "^3.0.0",
-    "supertest": "^6.3.3"
+    "supertest": "^7.1.4"
   },
   "dependencies": {
     "axios": "^1.6.0",
