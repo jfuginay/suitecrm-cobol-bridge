@@ -58,7 +58,7 @@ jobs:
         npm run format:php -- --dry-run
 
     - name: Upload lint results
-      uses: github/super-linter@v4
+      uses: github/super-linter@v7
       if: always()
       env:
         DEFAULT_BRANCH: main
