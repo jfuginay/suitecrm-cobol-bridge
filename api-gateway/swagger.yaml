@@ -1,0 +1,481 @@
+openapi: 3.0.0
+info:
+  title: SuiteCRM-COBOL Bridge API
+  description: REST API Gateway for executing COBOL programs from SuiteCRM
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@suitecrm-cobol.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Development server
+  - url: https://api.suitecrm-cobol.com/v1
+    description: Production server
+
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  accessToken:
+                    type: string
+                  refreshToken:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        200:
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  accessToken:
+                    type: string
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User logout
+      responses:
+        200:
+          description: Logout successful
+
+  /auth/me:
+    get:
+      tags:
+        - Authentication
+      summary: Get current user
+      responses:
+        200:
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/User'
+
+  /cobol/credit/calculate:
+    post:
+      tags:
+        - COBOL Programs
+      summary: Calculate credit approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditInput'
+      responses:
+        200:
+          description: Credit calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditOutput'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        429:
+          $ref: '#/components/responses/RateLimitExceeded'
+
+  /cobol/payroll/calculate:
+    post:
+      tags:
+        - COBOL Programs
+      summary: Calculate payroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayrollInput'
+      responses:
+        200:
+          description: Payroll calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayrollOutput'
+
+  /cobol/interest/calculate:
+    post:
+      tags:
+        - COBOL Programs
+      summary: Calculate interest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InterestInput'
+      responses:
+        200:
+          description: Interest calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterestOutput'
+
+  /cobol/batch/process:
+    post:
+      tags:
+        - COBOL Programs
+      summary: Submit batch job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - jobType
+                - parameters
+              properties:
+                jobType:
+                  type: string
+                  enum: [DAILY_INTEREST, PAYROLL_RUN, CREDIT_REVIEW]
+                parameters:
+                  type: object
+      responses:
+        202:
+          description: Batch job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  statusUrl:
+                    type: string
+
+  /cobol/batch/status/{jobId}:
+    get:
+      tags:
+        - COBOL Programs
+      summary: Get batch job status
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /monitoring/health:
+    get:
+      tags:
+        - Monitoring
+      summary: Health check
+      security: []
+      responses:
+        200:
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /monitoring/metrics:
+    get:
+      tags:
+        - Monitoring
+      summary: Get Prometheus metrics
+      responses:
+        200:
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+
+    CreditInput:
+      type: object
+      required:
+        - customerId
+        - creditAmount
+        - income
+        - existingDebt
+      properties:
+        customerId:
+          type: string
+        creditAmount:
+          type: number
+          minimum: 0
+        income:
+          type: number
+          minimum: 0
+        existingDebt:
+          type: number
+          minimum: 0
+
+    CreditOutput:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            approved:
+              type: boolean
+            creditLimit:
+              type: number
+            interestRate:
+              type: number
+            monthlyPayment:
+              type: number
+            riskScore:
+              type: integer
+
+    PayrollInput:
+      type: object
+      required:
+        - employeeId
+        - hoursWorked
+        - hourlyRate
+        - deductions
+      properties:
+        employeeId:
+          type: string
+        hoursWorked:
+          type: number
+          minimum: 0
+          maximum: 168
+        hourlyRate:
+          type: number
+          minimum: 0
+        deductions:
+          type: object
+          properties:
+            federal:
+              type: number
+            state:
+              type: number
+            insurance:
+              type: number
+
+    PayrollOutput:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            grossPay:
+              type: number
+            netPay:
+              type: number
+            deductions:
+              type: object
+
+    InterestInput:
+      type: object
+      required:
+        - principal
+        - rate
+        - term
+      properties:
+        principal:
+          type: number
+          minimum: 0
+        rate:
+          type: number
+          minimum: 0
+          maximum: 100
+        term:
+          type: integer
+          minimum: 1
+
+    InterestOutput:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            totalInterest:
+              type: number
+            totalAmount:
+              type: number
+            monthlyPayment:
+              type: number
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: number
+        environment:
+          type: string
+        version:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: false
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            details:
+              type: object
+            statusCode:
+              type: integer
+            timestamp:
+              type: string
+              format: date-time
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    RateLimitExceeded:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

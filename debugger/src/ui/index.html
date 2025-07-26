@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COBOL Time-Travel Debugger</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="debugger-header">
+            <h1>🕐 COBOL Time-Travel Debugger</h1>
+            <div class="header-controls">
+                <button id="loadTraceBtn" class="btn btn-primary">Load Trace</button>
+                <button id="recordBtn" class="btn btn-danger">Record New</button>
+                <button id="searchBtn" class="btn btn-secondary">Search</button>
+                <div class="connection-status">
+                    <span id="connectionStatus" class="status-indicator"></span>
+                    <span>WebSocket</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <div class="debugger-layout">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h3>Recent Traces</h3>
+                    <div id="traceList" class="trace-list"></div>
+                </div>
+                
+                <div class="sidebar-section">
+                    <h3>Bookmarks</h3>
+                    <div id="bookmarkList" class="bookmark-list"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>Patterns Detected</h3>
+                    <div id="patternList" class="pattern-list"></div>
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Timeline View -->
+                <div class="timeline-container">
+                    <div class="timeline-header">
+                        <h2 id="programName">No Trace Loaded</h2>
+                        <div class="timeline-controls">
+                            <button id="playBtn" class="control-btn" title="Play">▶️</button>
+                            <button id="pauseBtn" class="control-btn" title="Pause">⏸️</button>
+                            <button id="stepBackBtn" class="control-btn" title="Step Back">⏮️</button>
+                            <button id="stepForwardBtn" class="control-btn" title="Step Forward">⏭️</button>
+                            <button id="rewindBtn" class="control-btn" title="Rewind">⏪</button>
+                            <button id="fastForwardBtn" class="control-btn" title="Fast Forward">⏩</button>
+                            <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="100" value="0">
+                            <span id="stepIndicator" class="step-indicator">Step: 0/0</span>
+                        </div>
+                    </div>
+                    
+                    <canvas id="timelineCanvas" class="timeline-canvas"></canvas>
+                    
+                    <div class="execution-flow">
+                        <div id="executionPath" class="execution-path"></div>
+                    </div>
+                </div>
+
+                <!-- Code View -->
+                <div class="code-view-container">
+                    <div class="code-header">
+                        <h3>COBOL Code</h3>
+                        <div class="code-controls">
+                            <button id="addBreakpointBtn" class="btn btn-sm">Add Breakpoint</button>
+                            <button id="clearBreakpointsBtn" class="btn btn-sm">Clear All</button>
+                        </div>
+                    </div>
+                    <div id="codeView" class="code-view">
+                        <pre id="codeContent"></pre>
+                    </div>
+                </div>
+
+                <!-- Variable Inspector -->
+                <div class="variable-inspector-container">
+                    <div class="inspector-header">
+                        <h3>Variable Inspector</h3>
+                        <div class="inspector-controls">
+                            <input type="text" id="variableSearch" placeholder="Search variables...">
+                            <button id="watchBtn" class="btn btn-sm">Add Watch</button>
+                        </div>
+                    </div>
+                    <div id="variableInspector" class="variable-inspector">
+                        <table id="variableTable" class="variable-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Value</th>
+                                    <th>Type</th>
+                                    <th>Picture</th>
+                                    <th>Changes</th>
+                                </tr>
+                            </thead>
+                            <tbody id="variableTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Right Panel -->
+            <aside class="right-panel">
+                <!-- Edge Case Analyzer -->
+                <div class="panel-section">
+                    <h3>Edge Case Analysis</h3>
+                    <button id="analyzeBtn" class="btn btn-primary btn-block">Analyze</button>
+                    <div id="edgeCaseResults" class="edge-case-results"></div>
+                </div>
+
+                <!-- Patch Generator -->
+                <div class="panel-section">
+                    <h3>Patch Generator</h3>
+                    <div id="patchOptions" class="patch-options">
+                        <label>
+                            <input type="radio" name="patchType" value="boundary-check"> Boundary Check
+                        </label>
+                        <label>
+                            <input type="radio" name="patchType" value="null-check"> Null Check
+                        </label>
+                        <label>
+                            <input type="radio" name="patchType" value="overflow-protection"> Overflow Protection
+                        </label>
+                        <label>
+                            <input type="radio" name="patchType" value="division-guard"> Division Guard
+                        </label>
+                    </div>
+                    <button id="generatePatchBtn" class="btn btn-success btn-block">Generate Patch</button>
+                    <div id="patchResult" class="patch-result"></div>
+                </div>
+
+                <!-- Replay Engine -->
+                <div class="panel-section">
+                    <h3>Replay Engine</h3>
+                    <div id="replayInputs" class="replay-inputs">
+                        <h4>Modify Initial Values:</h4>
+                        <div id="inputModifications"></div>
+                        <button id="addInputBtn" class="btn btn-sm">Add Input</button>
+                    </div>
+                    <button id="replayBtn" class="btn btn-warning btn-block">Replay Execution</button>
+                    <div id="replayResults" class="replay-results"></div>
+                </div>
+
+                <!-- Statistics -->
+                <div class="panel-section">
+                    <h3>Execution Statistics</h3>
+                    <canvas id="statsChart" width="300" height="200"></canvas>
+                </div>
+            </aside>
+        </div>
+
+        <!-- Modals -->
+        <div id="loadTraceModal" class="modal">
+            <div class="modal-content">
+                <h2>Load Execution Trace</h2>
+                <div class="modal-body">
+                    <div id="availableTraces" class="available-traces"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal('loadTraceModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="searchModal" class="modal">
+            <div class="modal-content">
+                <h2>Search Traces</h2>
+                <div class="modal-body">
+                    <input type="text" id="searchInput" placeholder="Enter search term...">
+                    <select id="searchType">
+                        <option value="paragraph">Paragraph Name</option>
+                        <option value="variable">Variable Name</option>
+                        <option value="pattern">Pattern Type</option>
+                    </select>
+                    <button id="performSearchBtn" class="btn btn-primary">Search</button>
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="closeModal('searchModal')">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/websocket.js"></script>
+    <script src="js/timeline.js"></script>
+    <script src="js/variableInspector.js"></script>
+    <script src="js/replayEngine.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

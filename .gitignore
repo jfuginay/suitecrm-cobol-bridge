@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+vendor/
+.pnpm-store/
+
+# Build outputs
+build/
+dist/
+compiled/
+*.exe
+*.o
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker volumes
+mysql-data/
+redis-data/
+prometheus-data/
+grafana-data/
+suitecrm-data/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Debug traces
+debugger/traces/
+monitor.log
+debug-trace.log
+
+# Generated files
+api-gateway/swagger-ui/
+coverage/
+.nyc_output/
+
+# OS files
+Thumbs.db

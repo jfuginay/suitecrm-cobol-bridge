@@ -1,0 +1,46 @@
+{
+  "name": "suitecrm-cobol-business-rules-editor",
+  "version": "1.0.0",
+  "description": "Visual business rule editor for COBOL programs in SuiteCRM",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "react-flow-renderer": "^10.3.17",
+    "antd": "^5.12.8",
+    "codemirror": "^6.0.1",
+    "@codemirror/lang-javascript": "^6.2.1",
+    "@uiw/react-codemirror": "^4.21.21",
+    "uuid": "^9.0.1",
+    "dagre": "^0.8.5",
+    "file-saver": "^2.0.5",
+    "diff": "^5.1.0",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
+    "@ant-design/icons": "^5.2.6"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

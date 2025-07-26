@@ -1,0 +1,79 @@
+# COBOL Worker Docker Image
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gnucobol \
+    libcob-dev \
+    build-essential \
+    curl \
+    wget \
+    git \
+    unzip \
+    nodejs \
+    npm \
+    python3 \
+    python3-pip \
+    libdb2 \
+    libdb2-dev \
+    openssh-client \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install IBM DB2 client
+RUN wget https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz \
+    && tar -xzf linuxx64_odbc_cli.tar.gz -C /opt \
+    && rm linuxx64_odbc_cli.tar.gz
+
+# Set DB2 environment variables
+ENV IBM_DB_HOME=/opt/clidriver
+ENV LD_LIBRARY_PATH=$IBM_DB_HOME/lib:$LD_LIBRARY_PATH
+ENV PATH=$IBM_DB_HOME/bin:$PATH
+
+# Create worker directory
+WORKDIR /opt/cobol-worker
+
+# Copy package files
+COPY worker/package*.json ./
+
+# Install Node.js dependencies
+RUN npm ci --only=production
+
+# Copy worker application
+COPY worker/ ./
+
+# Copy COBOL runtime utilities
+COPY cobol-utils/ /opt/cobol-utils/
+
+# Create directories for COBOL programs and data
+RUN mkdir -p /var/cobol/programs /var/cobol/data /var/cobol/temp /var/log/cobol
+
+# Set up environment for COBOL
+ENV COB_LIBRARY_PATH=/opt/cobol-utils/lib:/var/cobol/programs
+ENV COB_CONFIG_DIR=/opt/cobol-utils/config
+ENV COB_SCREEN_EXCEPTIONS=Y
+ENV COB_SCREEN_ESC=Y
+
+# Copy supervisor configuration
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Copy startup script
+COPY docker/startup.sh /usr/local/bin/startup.sh
+RUN chmod +x /usr/local/bin/startup.sh
+
+# Health check script
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/health-check.sh
+
+# Expose worker port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+    CMD /usr/local/bin/health-check.sh || exit 1
+
+# Run supervisor
+CMD ["/usr/local/bin/startup.sh"]

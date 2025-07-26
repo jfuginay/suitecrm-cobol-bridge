@@ -1,0 +1,389 @@
+{
+  "traceId": "example-001",
+  "programName": "CALCULATE-INTEREST",
+  "metadata": {
+    "environment": "PRODUCTION",
+    "version": "1.2.3",
+    "user": "BATCH001",
+    "startTime": "2024-01-15T10:30:00Z"
+  },
+  "createdAt": 1705318200000,
+  "duration": 1523,
+  "steps": [
+    {
+      "index": 0,
+      "timestamp": 0,
+      "paragraph": "MAIN-PROCEDURE",
+      "section": "PROCEDURE",
+      "line": 100,
+      "operation": "PERFORM",
+      "variables": {
+        "WS-PRINCIPAL": {
+          "value": "10000.00",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        },
+        "WS-RATE": {
+          "value": "5.5",
+          "type": "DECIMAL",
+          "size": 3,
+          "packed": false,
+          "numeric": true,
+          "picture": "9V99"
+        },
+        "WS-TERM": {
+          "value": "12",
+          "type": "NUMERIC",
+          "size": 2,
+          "packed": false,
+          "numeric": true,
+          "picture": "99"
+        },
+        "WS-INTEREST": {
+          "value": "0",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1024,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [],
+      "stackTrace": ["MAIN-PROCEDURE"],
+      "conditions": {},
+      "loopIterations": 0,
+      "patterns": []
+    },
+    {
+      "index": 1,
+      "timestamp": 10,
+      "paragraph": "VALIDATE-INPUT",
+      "section": "PROCEDURE",
+      "line": 110,
+      "operation": "IF",
+      "variables": {
+        "WS-PRINCIPAL": {
+          "value": "10000.00",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        },
+        "WS-RATE": {
+          "value": "5.5",
+          "type": "DECIMAL",
+          "size": 3,
+          "packed": false,
+          "numeric": true,
+          "picture": "9V99"
+        },
+        "WS-TERM": {
+          "value": "12",
+          "type": "NUMERIC",
+          "size": 2,
+          "packed": false,
+          "numeric": true,
+          "picture": "99"
+        },
+        "WS-ERROR-FLAG": {
+          "value": "N",
+          "type": "ALPHANUMERIC",
+          "size": 1,
+          "packed": false,
+          "numeric": false,
+          "picture": "X"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1048,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [
+        {
+          "type": "COMPARE",
+          "source": "WS-PRINCIPAL",
+          "target": "ZERO",
+          "result": false
+        }
+      ],
+      "stackTrace": ["MAIN-PROCEDURE", "VALIDATE-INPUT"],
+      "conditions": {
+        "WS-PRINCIPAL > 0": true,
+        "WS-RATE > 0": true
+      },
+      "loopIterations": 0,
+      "patterns": []
+    },
+    {
+      "index": 2,
+      "timestamp": 25,
+      "paragraph": "CALCULATE-INTEREST",
+      "section": "PROCEDURE",
+      "line": 200,
+      "operation": "COMPUTE",
+      "variables": {
+        "WS-PRINCIPAL": {
+          "value": "10000.00",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        },
+        "WS-RATE": {
+          "value": "5.5",
+          "type": "DECIMAL",
+          "size": 3,
+          "packed": false,
+          "numeric": true,
+          "picture": "9V99"
+        },
+        "WS-TERM": {
+          "value": "12",
+          "type": "NUMERIC",
+          "size": 2,
+          "packed": false,
+          "numeric": true,
+          "picture": "99"
+        },
+        "WS-INTEREST": {
+          "value": "550.00",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        },
+        "WS-MONTHLY-RATE": {
+          "value": "0.004583",
+          "type": "DECIMAL",
+          "size": 7,
+          "packed": false,
+          "numeric": true,
+          "picture": "V9(6)"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1096,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [
+        {
+          "type": "COMPUTE",
+          "expression": "WS-PRINCIPAL * WS-RATE / 100 * WS-TERM / 12",
+          "result": "550.00",
+          "target": "WS-INTEREST"
+        }
+      ],
+      "stackTrace": ["MAIN-PROCEDURE", "CALCULATE-INTEREST"],
+      "conditions": {},
+      "loopIterations": 0,
+      "patterns": []
+    },
+    {
+      "index": 3,
+      "timestamp": 40,
+      "paragraph": "CALCULATE-INTEREST",
+      "section": "PROCEDURE",
+      "line": 210,
+      "operation": "DIVIDE",
+      "variables": {
+        "WS-PRINCIPAL": {
+          "value": "10000.00",
+          "type": "DECIMAL",
+          "size": 8,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(6)V99"
+        },
+        "WS-RATE": {
+          "value": "0",
+          "type": "DECIMAL",
+          "size": 3,
+          "packed": false,
+          "numeric": true,
+          "picture": "9V99"
+        },
+        "WS-DIVISOR": {
+          "value": "0",
+          "type": "NUMERIC",
+          "size": 1,
+          "packed": false,
+          "numeric": true,
+          "picture": "9"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1096,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [
+        {
+          "type": "DIVIDE",
+          "dividend": "WS-PRINCIPAL",
+          "divisor": "WS-DIVISOR",
+          "error": "DIVISION_BY_ZERO"
+        }
+      ],
+      "stackTrace": ["MAIN-PROCEDURE", "CALCULATE-INTEREST"],
+      "conditions": {},
+      "loopIterations": 0,
+      "patterns": [
+        {
+          "type": "DIVISION_BY_ZERO_RISK",
+          "variable": "WS-DIVISOR"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "timestamp": 55,
+      "paragraph": "WRITE-OUTPUT",
+      "section": "PROCEDURE",
+      "line": 300,
+      "operation": "WRITE",
+      "variables": {
+        "WS-OUTPUT-RECORD": {
+          "value": "PRINCIPAL: 10000.00 INTEREST: 550.00",
+          "type": "ALPHANUMERIC",
+          "size": 80,
+          "packed": false,
+          "numeric": false,
+          "picture": "X(80)"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1176,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {
+        "OUTPUT-FILE": "00"
+      },
+      "performedOperations": [
+        {
+          "type": "WRITE",
+          "file": "OUTPUT-FILE",
+          "record": "WS-OUTPUT-RECORD",
+          "status": "00"
+        }
+      ],
+      "stackTrace": ["MAIN-PROCEDURE", "WRITE-OUTPUT"],
+      "conditions": {},
+      "loopIterations": 0,
+      "patterns": []
+    },
+    {
+      "index": 5,
+      "timestamp": 70,
+      "paragraph": "PROCESS-LOOP",
+      "section": "PROCEDURE",
+      "line": 400,
+      "operation": "PERFORM",
+      "variables": {
+        "WS-COUNTER": {
+          "value": "1",
+          "type": "NUMERIC",
+          "size": 3,
+          "packed": false,
+          "numeric": true,
+          "picture": "999"
+        },
+        "WS-MAX-COUNT": {
+          "value": "1000",
+          "type": "NUMERIC",
+          "size": 4,
+          "packed": false,
+          "numeric": true,
+          "picture": "9999"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1184,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [],
+      "stackTrace": ["MAIN-PROCEDURE", "PROCESS-LOOP"],
+      "conditions": {
+        "WS-COUNTER <= WS-MAX-COUNT": true
+      },
+      "loopIterations": 1,
+      "patterns": []
+    },
+    {
+      "index": 6,
+      "timestamp": 85,
+      "paragraph": "PROCESS-LOOP",
+      "section": "PROCEDURE", 
+      "line": 410,
+      "operation": "ADD",
+      "variables": {
+        "WS-COUNTER": {
+          "value": "999999999",
+          "type": "NUMERIC",
+          "size": 9,
+          "packed": false,
+          "numeric": true,
+          "picture": "9(9)"
+        },
+        "WS-INCREMENT": {
+          "value": "1",
+          "type": "NUMERIC",
+          "size": 1,
+          "packed": false,
+          "numeric": true,
+          "picture": "9"
+        }
+      },
+      "memory": {
+        "workingStorage": {
+          "used": 1192,
+          "allocated": 4096
+        }
+      },
+      "fileHandles": {},
+      "performedOperations": [
+        {
+          "type": "ADD",
+          "source": "WS-INCREMENT",
+          "target": "WS-COUNTER",
+          "overflow": true
+        }
+      ],
+      "stackTrace": ["MAIN-PROCEDURE", "PROCESS-LOOP"],
+      "conditions": {},
+      "loopIterations": 500,
+      "patterns": [
+        {
+          "type": "OVERFLOW_RISK",
+          "variables": ["WS-COUNTER"]
+        }
+      ]
+    }
+  ],
+  "tags": ["pattern:DIVISION_BY_ZERO_RISK", "pattern:OVERFLOW_RISK"]
+}

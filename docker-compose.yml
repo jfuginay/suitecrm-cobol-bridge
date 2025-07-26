@@ -1,0 +1,252 @@
+version: '3.8'
+
+services:
+  # SuiteCRM with COBOL Bridge
+  suitecrm:
+    build:
+      context: .
+      dockerfile: Dockerfile.suitecrm
+    container_name: suitecrm-cobol-bridge
+    ports:
+      - "8080:80"
+    environment:
+      - DATABASE_HOST=mysql
+      - DATABASE_NAME=suitecrm
+      - DATABASE_USER=suitecrm
+      - DATABASE_PASSWORD=suitecrm123
+      - COBOL_API_URL=http://api-gateway:3000
+      - MONITORING_URL=http://monitoring:8081
+      - REDIS_HOST=redis
+    volumes:
+      - ./suitecrm-integration:/var/www/html/custom/cobol-bridge
+      - suitecrm-data:/var/www/html
+    depends_on:
+      - mysql
+      - api-gateway
+      - redis
+    networks:
+      - cobol-bridge
+
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: cobol-bridge-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=root123
+      - MYSQL_DATABASE=suitecrm
+      - MYSQL_USER=suitecrm
+      - MYSQL_PASSWORD=suitecrm123
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./demo/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - cobol-bridge
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: cobol-bridge-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cobol-bridge
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: cobol-api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - DB_HOST=mysql
+      - DB_NAME=suitecrm
+      - DB_USER=suitecrm
+      - DB_PASSWORD=suitecrm123
+      - JWT_SECRET=your-secret-key-here
+    volumes:
+      - ./cobol-core:/app/cobol-programs
+      - ./api-gateway/logs:/app/logs
+    depends_on:
+      - redis
+      - mysql
+      - cobol-compiler
+    networks:
+      - cobol-bridge
+
+  # COBOL Compiler Service
+  cobol-compiler:
+    build:
+      context: .
+      dockerfile: Dockerfile.cobol
+    container_name: cobol-compiler
+    volumes:
+      - ./cobol-core:/cobol-programs
+      - cobol-binaries:/compiled
+    networks:
+      - cobol-bridge
+
+  # Real-time Monitoring Dashboard
+  monitoring:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile
+    container_name: cobol-monitoring
+    ports:
+      - "8081:80"
+    environment:
+      - REACT_APP_API_URL=http://api-gateway:3000
+      - REACT_APP_WS_URL=ws://api-gateway:3000
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+
+  # Business Rules Editor
+  rules-editor:
+    build:
+      context: ./business-rules
+      dockerfile: Dockerfile
+    container_name: cobol-rules-editor
+    ports:
+      - "8082:80"
+    environment:
+      - REACT_APP_API_URL=http://api-gateway:3000
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+
+  # Mobile API Service
+  mobile-api:
+    build:
+      context: ./mobile-api
+      dockerfile: Dockerfile
+    container_name: cobol-mobile-api
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - COBOL_API_URL=http://api-gateway:3000
+      - DB_HOST=mysql
+      - DB_NAME=suitecrm
+      - DB_USER=suitecrm
+      - DB_PASSWORD=suitecrm123
+    depends_on:
+      - api-gateway
+      - mysql
+    networks:
+      - cobol-bridge
+
+  # Time-Travel Debugger
+  debugger:
+    build:
+      context: ./debugger
+      dockerfile: Dockerfile
+    container_name: cobol-debugger
+    ports:
+      - "3005:3005"
+      - "8083:80"
+    environment:
+      - NODE_ENV=production
+      - API_URL=http://api-gateway:3000
+    volumes:
+      - ./debugger/traces:/app/traces
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+
+  # Cloud Burst Scheduler
+  cloud-burst:
+    build:
+      context: ./cloud-burst
+      dockerfile: Dockerfile
+    container_name: cobol-cloud-burst
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - MAINFRAME_HOST=${MAINFRAME_HOST:-localhost}
+      - MAINFRAME_USER=${MAINFRAME_USER:-user}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AZURE_REGION=${AZURE_REGION:-eastus}
+      - GCP_REGION=${GCP_REGION:-us-central1}
+    volumes:
+      - ./cloud-burst/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - api-gateway
+    networks:
+      - cobol-bridge
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cobol-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - cobol-bridge
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cobol-grafana
+    ports:
+      - "3006:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - cobol-bridge
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: cobol-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - suitecrm
+      - monitoring
+      - rules-editor
+      - api-gateway
+    networks:
+      - cobol-bridge
+
+volumes:
+  suitecrm-data:
+  mysql-data:
+  redis-data:
+  cobol-binaries:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  cobol-bridge:
+    driver: bridge

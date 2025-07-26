@@ -1,0 +1,129 @@
+.ant-layout-header {
+  display: flex;
+  align-items: center;
+}
+
+.ant-layout-sider {
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.06);
+}
+
+.ant-menu-item {
+  margin: 8px 0 !important;
+  height: auto !important;
+  line-height: 1.5 !important;
+  padding: 12px 24px !important;
+}
+
+.ant-card {
+  height: 100%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.rule-extractor .ant-tabs-content {
+  min-height: 500px;
+}
+
+.decision-tree .react-flow__controls {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.decision-tree .react-flow__controls button {
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+}
+
+.decision-tree .react-flow__controls button:hover {
+  background: #f5f5f5;
+}
+
+.decision-tree .react-flow__minimap {
+  background: #f0f2f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.test-generator .ant-table-small .ant-table-thead > tr > th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.cobol-exporter .ant-card-body {
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Animations */
+.ant-card {
+  transition: all 0.3s;
+}
+
+.ant-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* React Flow custom styles */
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px #1890ff;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #1890ff;
+  stroke-width: 2;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: #555;
+  border: 2px solid #fff;
+}
+
+.react-flow__handle:hover {
+  background: #1890ff;
+}
+
+/* Code editor styles */
+.cm-editor {
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+}
+
+.cm-editor.cm-focused {
+  border-color: #40a9ff;
+  outline: 0;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .ant-layout-sider {
+    position: fixed;
+    z-index: 999;
+    height: 100vh;
+  }
+  
+  .ant-layout-content {
+    margin-left: 0;
+  }
+}

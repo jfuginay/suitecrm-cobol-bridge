@@ -1,0 +1,48 @@
+{
+  "name": "suitecrm-cobol-time-travel-debugger",
+  "version": "1.0.0",
+  "description": "Time-travel debugger for SuiteCRM-COBOL Bridge - debug production COBOL issues with JavaScript ease",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest",
+    "build-ui": "webpack --mode production"
+  },
+  "keywords": [
+    "cobol",
+    "debugger",
+    "time-travel",
+    "suitecrm",
+    "debugging"
+  ],
+  "author": "SuiteCRM-COBOL Bridge Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "uuid": "^9.0.0",
+    "lz-string": "^1.5.0",
+    "diff": "^5.1.0",
+    "chart.js": "^4.3.0",
+    "moment": "^2.29.4",
+    "lodash": "^4.17.21",
+    "sqlite3": "^5.1.6",
+    "compression": "^1.7.4",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22",
+    "jest": "^29.5.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.4",
+    "@babel/core": "^7.22.5",
+    "@babel/preset-env": "^7.22.5",
+    "babel-loader": "^9.1.2",
+    "css-loader": "^6.8.1",
+    "style-loader": "^3.3.3",
+    "html-webpack-plugin": "^5.5.3"
+  }
+}

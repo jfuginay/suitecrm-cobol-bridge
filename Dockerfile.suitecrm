@@ -1,0 +1,80 @@
+FROM php:8.1-apache
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    libpng-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    libzip-dev \
+    libicu-dev \
+    libxml2-dev \
+    libldap2-dev \
+    libcurl4-openssl-dev \
+    unzip \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure PHP extensions
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+    gd \
+    mysqli \
+    pdo \
+    pdo_mysql \
+    zip \
+    intl \
+    xml \
+    soap \
+    curl \
+    opcache \
+    bcmath
+
+# Install Composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# Enable Apache modules
+RUN a2enmod rewrite headers expires
+
+# Set recommended PHP.ini settings
+RUN { \
+    echo 'memory_limit=512M'; \
+    echo 'upload_max_filesize=50M'; \
+    echo 'post_max_size=50M'; \
+    echo 'max_execution_time=600'; \
+    echo 'max_input_time=600'; \
+    echo 'error_reporting=E_ALL & ~E_NOTICE & ~E_STRICT & ~E_DEPRECATED'; \
+    echo 'display_errors=Off'; \
+    echo 'log_errors=On'; \
+    } > /usr/local/etc/php/conf.d/suitecrm.ini
+
+# Download and extract SuiteCRM
+WORKDIR /var/www/html
+RUN wget https://github.com/salesagility/SuiteCRM/archive/v7.14.2.tar.gz \
+    && tar -xzf v7.14.2.tar.gz --strip-components=1 \
+    && rm v7.14.2.tar.gz
+
+# Set permissions
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html \
+    && chmod -R 775 cache custom modules themes data upload
+
+# Copy custom COBOL Bridge integration
+COPY suitecrm-integration /var/www/html/custom/cobol-bridge
+
+# Apache configuration
+COPY apache-config.conf /etc/apache2/sites-available/000-default.conf
+
+# Create install script
+RUN echo '#!/bin/bash\n\
+if [ ! -f /var/www/html/config.php ]; then\n\
+    echo "First run - waiting for database..."\n\
+    sleep 10\n\
+fi\n\
+apache2-foreground' > /usr/local/bin/start.sh \
+    && chmod +x /usr/local/bin/start.sh
+
+EXPOSE 80
+
+CMD ["/usr/local/bin/start.sh"]

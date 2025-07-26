@@ -1,0 +1,51 @@
+{
+  "name": "suitecrm-cobol-mobile-api",
+  "version": "1.0.0",
+  "description": "Mobile API bridge for SuiteCRM-COBOL integration with React Native support",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest",
+    "generate:types": "node src/generators/TypeScriptGenerator.js",
+    "generate:components": "node src/generators/ReactNativeGenerator.js"
+  },
+  "keywords": [
+    "suitecrm",
+    "cobol",
+    "mobile",
+    "react-native",
+    "api",
+    "ebcdic",
+    "mainframe"
+  ],
+  "author": "SuiteCRM-COBOL Bridge Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "socket.io": "^4.6.1",
+    "iconv-lite": "^0.6.3",
+    "node-fetch": "^2.6.9",
+    "sqlite3": "^5.1.6",
+    "node-cron": "^3.0.2",
+    "jsonwebtoken": "^9.0.0",
+    "bcrypt": "^5.1.1",
+    "winston": "^3.8.2",
+    "dotenv": "^16.0.3",
+    "express-rate-limit": "^6.7.0",
+    "helmet": "^7.0.0",
+    "compression": "^1.7.4",
+    "uuid": "^9.0.0",
+    "firebase-admin": "^11.8.0",
+    "expo-server-sdk": "^3.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22",
+    "jest": "^29.5.0",
+    "@types/express": "^4.17.17",
+    "@types/node": "^18.16.0",
+    "typescript": "^5.0.4"
+  }
+}

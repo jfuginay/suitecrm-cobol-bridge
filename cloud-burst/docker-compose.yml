@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  # CloudBurst Scheduler
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cloudburst-scheduler
+    environment:
+      - NODE_ENV=development
+      - REDIS_URL=redis://redis:6379
+      - CLOUD_PROVIDER=docker
+      - MAINFRAME_HOST=mainframe-mock
+      - DB2_HOST=db2-mock
+      - DB2_PORT=50000
+      - LOG_LEVEL=debug
+    ports:
+      - "3000:3000"
+      - "9090:9090"
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - mainframe-mock
+    networks:
+      - cloudburst-network
+
+  # Redis for job queue
+  redis:
+    image: redis:7-alpine
+    container_name: cloudburst-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cloudburst-network
+
+  # Mock mainframe API
+  mainframe-mock:
+    build:
+      context: ./test/mocks
+      dockerfile: Dockerfile.mainframe
+    container_name: mainframe-mock
+    environment:
+      - PORT=8080
+      - SSH_PORT=22
+      - DB2_PORT=50000
+    ports:
+      - "8080:8080"
+      - "2222:22"
+      - "50000:50000"
+    volumes:
+      - ./test/data:/data
+    networks:
+      - cloudburst-network
+
+  # Local COBOL worker
+  worker-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: cobol-worker-1
+    environment:
+      - WORKER_ID=worker-1
+      - MAINFRAME_HOST=mainframe-mock
+      - DB2_HOST=mainframe-mock
+      - DB2_PORT=50000
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - mainframe-mock
+    networks:
+      - cloudburst-network
+
+  # Another worker for testing scaling
+  worker-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: cobol-worker-2
+    environment:
+      - WORKER_ID=worker-2
+      - MAINFRAME_HOST=mainframe-mock
+      - DB2_HOST=mainframe-mock
+      - DB2_PORT=50000
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - mainframe-mock
+    networks:
+      - cloudburst-network
+
+  # Monitoring - Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cloudburst-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - cloudburst-network
+
+  # Monitoring - Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cloudburst-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - cloudburst-network
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  cloudburst-network:
+    driver: bridge

@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  api-gateway:
+    build: .
+    container_name: suitecrm-cobol-api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-your-refresh-secret}
+      - REDIS_URL=redis://redis:6379
+      - COBOL_BIN_PATH=/app/cobol/bin
+      - TEMP_PATH=/app/temp
+      - LOG_PATH=/app/logs
+      - LOG_LEVEL=info
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+      - ALLOWED_COBOL_PROGRAMS=CREDIT01,PAYROLL01,INTEREST01
+      - COBOL_TIMEOUT=30000
+    volumes:
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+      - ../cobol/bin:/app/cobol/bin:ro
+    depends_on:
+      - redis
+    networks:
+      - suitecrm-cobol-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: suitecrm-cobol-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - suitecrm-cobol-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nginx:
+    image: nginx:alpine
+    container_name: suitecrm-cobol-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api-gateway
+    networks:
+      - suitecrm-cobol-network
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  suitecrm-cobol-network:
+    driver: bridge

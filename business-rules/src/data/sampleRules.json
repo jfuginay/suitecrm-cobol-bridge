@@ -1,0 +1,68 @@
+{
+  "rules": [
+    {
+      "id": "discount-calculation",
+      "name": "Customer Discount Calculation",
+      "description": "Determines discount percentage based on customer type and order amount",
+      "cobolCode": "       IF CUSTOMER-TYPE = \"PREMIUM\"\n          IF ORDER-AMOUNT > 1000\n             COMPUTE DISCOUNT-PERCENT = 15\n          ELSE\n             COMPUTE DISCOUNT-PERCENT = 10\n          END-IF\n       ELSE\n          IF CUSTOMER-TYPE = \"REGULAR\"\n             IF ORDER-AMOUNT > 500\n                COMPUTE DISCOUNT-PERCENT = 5\n             ELSE\n                COMPUTE DISCOUNT-PERCENT = 0\n             END-IF\n          END-IF\n       END-IF"
+    },
+    {
+      "id": "credit-limit-check",
+      "name": "Credit Limit Validation",
+      "description": "Validates customer credit limit based on credit score",
+      "cobolCode": "       EVALUATE CREDIT-SCORE\n          WHEN 750 THRU 850\n             MOVE 10000 TO CREDIT-LIMIT\n             MOVE \"APPROVED\" TO CREDIT-STATUS\n          WHEN 650 THRU 749\n             MOVE 5000 TO CREDIT-LIMIT\n             MOVE \"APPROVED\" TO CREDIT-STATUS\n          WHEN 550 THRU 649\n             MOVE 2500 TO CREDIT-LIMIT\n             MOVE \"CONDITIONAL\" TO CREDIT-STATUS\n          WHEN OTHER\n             MOVE 0 TO CREDIT-LIMIT\n             MOVE \"DENIED\" TO CREDIT-STATUS\n       END-EVALUATE"
+    },
+    {
+      "id": "order-validation",
+      "name": "Order Processing Validation",
+      "description": "Validates order before processing",
+      "cobolCode": "       IF NUMERIC(ORDER-AMOUNT)\n          IF ORDER-AMOUNT > 0\n             IF PRODUCT-CODE NOT = SPACES\n                MOVE \"VALID\" TO ORDER-STATUS\n                PERFORM PROCESS-ORDER\n             ELSE\n                MOVE \"INVALID-PRODUCT\" TO ORDER-STATUS\n                DISPLAY \"Error: Invalid product code\"\n             END-IF\n          ELSE\n             MOVE \"INVALID-AMOUNT\" TO ORDER-STATUS\n             DISPLAY \"Error: Order amount must be positive\"\n          END-IF\n       ELSE\n          MOVE \"INVALID-AMOUNT\" TO ORDER-STATUS\n          DISPLAY \"Error: Order amount must be numeric\"\n       END-IF"
+    },
+    {
+      "id": "shipping-calculation",
+      "name": "Shipping Cost Calculation",
+      "description": "Calculates shipping cost based on location and weight",
+      "cobolCode": "       EVALUATE SHIPPING-ZONE\n          WHEN \"LOCAL\"\n             COMPUTE SHIPPING-COST = PACKAGE-WEIGHT * 2.50\n          WHEN \"REGIONAL\"\n             COMPUTE SHIPPING-COST = PACKAGE-WEIGHT * 4.00\n          WHEN \"NATIONAL\"\n             COMPUTE SHIPPING-COST = PACKAGE-WEIGHT * 6.50\n          WHEN \"INTERNATIONAL\"\n             COMPUTE SHIPPING-COST = PACKAGE-WEIGHT * 12.00\n             IF PACKAGE-WEIGHT > 50\n                COMPUTE SHIPPING-COST = SHIPPING-COST * 1.25\n             END-IF\n          WHEN OTHER\n             MOVE 0 TO SHIPPING-COST\n             DISPLAY \"Error: Invalid shipping zone\"\n       END-EVALUATE"
+    }
+  ],
+  "testData": {
+    "discount-calculation": [
+      {
+        "CUSTOMER-TYPE": "PREMIUM",
+        "ORDER-AMOUNT": 1500
+      },
+      {
+        "CUSTOMER-TYPE": "REGULAR",
+        "ORDER-AMOUNT": 750
+      }
+    ],
+    "credit-limit-check": [
+      {
+        "CREDIT-SCORE": 800
+      },
+      {
+        "CREDIT-SCORE": 600
+      }
+    ],
+    "order-validation": [
+      {
+        "ORDER-AMOUNT": "100.50",
+        "PRODUCT-CODE": "PROD-001"
+      },
+      {
+        "ORDER-AMOUNT": "ABC",
+        "PRODUCT-CODE": "PROD-001"
+      }
+    ],
+    "shipping-calculation": [
+      {
+        "SHIPPING-ZONE": "INTERNATIONAL",
+        "PACKAGE-WEIGHT": 75
+      },
+      {
+        "SHIPPING-ZONE": "LOCAL",
+        "PACKAGE-WEIGHT": 10
+      }
+    ]
+  }
+}
