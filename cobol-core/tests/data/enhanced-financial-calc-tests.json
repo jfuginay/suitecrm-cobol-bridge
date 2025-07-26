@@ -1,0 +1,92 @@
+[
+  {
+    "name": "basic_loan_calculation",
+    "description": "Test basic loan calculation with standard parameters",
+    "input": "100000\n5.5\n30\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Total Interest: \\$\\d+\\.\\d{2}"
+    }
+  },
+  {
+    "name": "zero_principal",
+    "description": "Test calculation with zero principal amount",
+    "input": "0\n5.5\n30\n",
+    "expectedOutput": {
+      "type": "regex", 
+      "pattern": "Total Interest: \\$0\\.00"
+    }
+  },
+  {
+    "name": "high_interest_rate",
+    "description": "Test calculation with high interest rate",
+    "input": "50000\n15.0\n15\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Total Interest: \\$\\d+\\.\\d{2}"
+    }
+  },
+  {
+    "name": "short_term_loan",
+    "description": "Test calculation for short-term loan",
+    "input": "25000\n8.25\n5\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Monthly Payment: \\$\\d+\\.\\d{2}"
+    }
+  },
+  {
+    "name": "long_term_loan",
+    "description": "Test calculation for long-term loan",
+    "input": "250000\n3.75\n40\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('Total Interest:') && output.includes('Monthly Payment:')"
+    }
+  },
+  {
+    "name": "minimum_payment",
+    "description": "Test calculation for minimum loan amount",
+    "input": "1000\n12.0\n12\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Total Amount: \\$\\d+\\.\\d{2}"
+    }
+  },
+  {
+    "name": "maximum_precision",
+    "description": "Test calculation with high precision values",
+    "input": "123456.78\n4.125\n36\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => parseFloat(output.match(/Total Interest: \\$(\\d+\\.\\d{2})/)?.[1]) > 0"
+    }
+  },
+  {
+    "name": "edge_case_very_low_rate",
+    "description": "Test calculation with very low interest rate",
+    "input": "100000\n0.01\n30\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Total Interest: \\$\\d+\\.\\d{2}"
+    }
+  },
+  {
+    "name": "edge_case_very_high_rate",
+    "description": "Test calculation with very high interest rate",
+    "input": "10000\n25.99\n10\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('Total Interest:') && parseFloat(output.match(/Total Interest: \\$(\\d+\\.\\d{2})/)?.[1]) > 10000"
+    }
+  },
+  {
+    "name": "single_year_loan",
+    "description": "Test calculation for single year loan",
+    "input": "12000\n6.5\n1\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "Monthly Payment: \\$\\d+\\.\\d{2}"
+    }
+  }
+]

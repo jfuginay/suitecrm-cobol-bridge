@@ -1,0 +1,274 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suitecrm-config
+  namespace: suitecrm-cobol
+data:
+  COBOL_API_URL: "http://api-gateway:3000"
+  MONITORING_URL: "http://monitoring:8081"
+  REDIS_SENTINEL_HOSTS: "redis-sentinel-0.redis-sentinel:26379,redis-sentinel-1.redis-sentinel:26379,redis-sentinel-2.redis-sentinel:26379"
+  LOG_LEVEL: "error"
+  NODE_ENV: "production"
+  METRICS_ENABLED: "true"
+  TRACING_ENABLED: "true"
+  JWT_EXPIRY: "1h"
+  DB_POOL_MIN: "10"
+  DB_POOL_MAX: "50"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: suitecrm-cobol
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log error;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 4096;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        # Logging
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        access_log /var/log/nginx/access.log main;
+
+        # Performance
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 100M;
+
+        # Gzip
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "no-referrer-when-downgrade" always;
+        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+
+        # Rate limiting
+        limit_req_zone $binary_remote_addr zone=api:10m rate=100r/s;
+        limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+
+        # Upstream servers
+        upstream suitecrm {
+            server suitecrm:80 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream api {
+            least_conn;
+            server api-gateway:3000 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream monitoring {
+            server monitoring:80 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream rules {
+            server rules-editor:80 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream mobile {
+            server mobile-api:3001 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream debugger {
+            server debugger:80 max_fails=3 fail_timeout=30s;
+        }
+
+        upstream grafana {
+            server grafana:3000 max_fails=3 fail_timeout=30s;
+        }
+
+        # SSL configuration
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+        ssl_session_timeout 10m;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_tickets off;
+        ssl_stapling on;
+        ssl_stapling_verify on;
+
+        # Main server block
+        server {
+            listen 80;
+            server_name _;
+            return 301 https://$host$request_uri;
+        }
+
+        server {
+            listen 443 ssl http2;
+            server_name _;
+
+            ssl_certificate /etc/nginx/ssl/cert.pem;
+            ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+            # SuiteCRM
+            location / {
+                proxy_pass http://suitecrm;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_connect_timeout 300s;
+                proxy_send_timeout 300s;
+                proxy_read_timeout 300s;
+            }
+
+            # API Gateway
+            location /api/ {
+                limit_req zone=api burst=50 nodelay;
+                proxy_pass http://api/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                
+                # WebSocket support
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+            }
+
+            # Monitoring Dashboard
+            location /monitoring/ {
+                proxy_pass http://monitoring/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Rules Editor
+            location /rules/ {
+                proxy_pass http://rules/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Mobile API
+            location /mobile/ {
+                proxy_pass http://mobile/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Debugger
+            location /debugger/ {
+                proxy_pass http://debugger/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Grafana
+            location /grafana/ {
+                proxy_pass http://grafana/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: suitecrm-cobol
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'suitecrm-cobol-prod'
+        
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager:9093
+
+    rule_files:
+      - '/etc/prometheus/rules/*.yml'
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'api-gateway'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - suitecrm-cobol
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: api-gateway
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+
+      - job_name: 'suitecrm'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - suitecrm-cobol
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: suitecrm
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '(.*):10250'
+            replacement: '${1}:9100'
+            target_label: __address__
+
+      - job_name: 'kube-state-metrics'
+        static_configs:
+          - targets: ['kube-state-metrics:8080']

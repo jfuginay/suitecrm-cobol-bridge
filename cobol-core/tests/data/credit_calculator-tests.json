@@ -1,0 +1,92 @@
+[
+  {
+    "name": "excellent_credit_high_income",
+    "description": "Test credit approval for excellent credit and high income",
+    "input": "CUST001\n100000\n5000\n75000\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "(APPROVED|CREDIT LIMIT: \\$\\d+)"
+    }
+  },
+  {
+    "name": "good_credit_moderate_income",
+    "description": "Test credit approval for good credit and moderate income",
+    "input": "CUST002\n60000\n15000\n45000\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "(APPROVED|CREDIT LIMIT: \\$\\d+)"
+    }
+  },
+  {
+    "name": "poor_credit_high_debt",
+    "description": "Test credit decline for poor credit and high debt",
+    "input": "CUST003\n30000\n45000\n50000\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "(DECLINED|INSUFFICIENT|DENIED)"
+    }
+  },
+  {
+    "name": "average_credit_profile",
+    "description": "Test credit decision for average credit profile",
+    "input": "CUST004\n55000\n25000\n35000\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('CREDIT LIMIT:') || output.includes('APPROVED') || output.includes('DECLINED')"
+    }
+  },
+  {
+    "name": "high_income_no_debt",
+    "description": "Test credit approval for high income with no existing debt",
+    "input": "CUST005\n125000\n0\n100000\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "APPROVED.*CREDIT LIMIT: \\$\\d+"
+    }
+  },
+  {
+    "name": "minimum_income_threshold",
+    "description": "Test credit decision at minimum income threshold",
+    "input": "CUST006\n25000\n10000\n20000\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.length > 0 && (output.includes('APPROVED') || output.includes('DECLINED'))"
+    }
+  },
+  {
+    "name": "debt_to_income_ratio_test",
+    "description": "Test credit decision based on debt-to-income ratio",
+    "input": "CUST007\n80000\n40000\n50000\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('DEBT-TO-INCOME') || output.includes('CREDIT LIMIT:') || output.includes('DECLINED')"
+    }
+  },
+  {
+    "name": "premium_customer_profile",
+    "description": "Test credit processing for premium customer",
+    "input": "CUST008\n200000\n10000\n150000\n",
+    "expectedOutput": {
+      "type": "regex",
+      "pattern": "APPROVED.*PREMIUM.*CREDIT LIMIT: \\$\\d+"
+    }
+  },
+  {
+    "name": "borderline_approval_case",
+    "description": "Test borderline credit approval case",
+    "input": "CUST009\n45000\n22500\n30000\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('CREDIT LIMIT:') && parseFloat(output.match(/CREDIT LIMIT: \\$(\\d+)/)?.[1]) > 0"
+    }
+  },
+  {
+    "name": "risk_assessment_validation",
+    "description": "Test risk assessment calculation",
+    "input": "CUST010\n70000\n35000\n40000\n",
+    "expectedOutput": {
+      "type": "function",
+      "validator": "output => output.includes('RISK SCORE:') || output.includes('APPROVED') || output.includes('DECLINED')"
+    }
+  }
+]

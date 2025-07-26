@@ -1,0 +1,443 @@
+name: Container Security Scanning
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile*'
+      - '**/Dockerfile'
+      - 'docker-compose*.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile*'
+      - '**/Dockerfile'
+      - 'docker-compose*.yml'
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Dockerfile Security Linting
+  dockerfile-security:
+    name: Dockerfile Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Hadolint (Dockerfile linter)
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile.suitecrm
+        format: sarif
+        output-file: hadolint-suitecrm.sarif
+        no-fail: false
+
+    - name: Run Hadolint on COBOL Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile.cobol
+        format: sarif
+        output-file: hadolint-cobol.sarif
+        no-fail: false
+
+    - name: Scan API Gateway Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: api-gateway/Dockerfile
+        format: sarif
+        output-file: hadolint-api-gateway.sarif
+        no-fail: false
+
+    - name: Upload Hadolint results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: |
+          hadolint-suitecrm.sarif
+          hadolint-cobol.sarif
+          hadolint-api-gateway.sarif
+
+    - name: Run Docker Bench Security
+      run: |
+        docker run --rm --net host --pid host --userns host --cap-add audit_control \
+          -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
+          -v /var/lib:/var/lib \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v /usr/lib/systemd:/usr/lib/systemd \
+          -v /etc:/etc --label docker_bench_security \
+          docker/docker-bench-security:latest > docker-bench-results.txt
+
+    - name: Upload Docker Bench results
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-bench-security-${{ github.sha }}
+        path: docker-bench-results.txt
+        retention-days: 30
+
+  # Container Image Vulnerability Scanning
+  container-scan:
+    name: Container Vulnerability Scanning
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        image:
+          - name: suitecrm
+            dockerfile: Dockerfile.suitecrm
+            context: .
+          - name: cobol-compiler
+            dockerfile: Dockerfile.cobol
+            context: .
+          - name: api-gateway
+            dockerfile: api-gateway/Dockerfile
+            context: ./api-gateway
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build container image
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.image.context }}
+        file: ${{ matrix.image.dockerfile }}
+        tags: ${{ matrix.image.name }}:test
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ matrix.image.name }}:test
+        format: 'sarif'
+        output: 'trivy-${{ matrix.image.name }}.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-${{ matrix.image.name }}.sarif'
+
+    - name: Run Grype vulnerability scanner
+      uses: anchore/scan-action@v3
+      with:
+        image: ${{ matrix.image.name }}:test
+        fail-build: false
+        severity-cutoff: critical
+
+    - name: Upload Anchore scan SARIF report
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: results.sarif
+
+    - name: Run Snyk Container Security
+      uses: snyk/actions/docker@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        image: ${{ matrix.image.name }}:test
+        args: --severity-threshold=high --file=${{ matrix.image.dockerfile }}
+      continue-on-error: true
+
+    - name: Run Docker Scout (if available)
+      run: |
+        # Install Docker Scout
+        curl -sSfL https://raw.githubusercontent.com/docker/scout-cli/main/install.sh | sh -s --
+        
+        # Run vulnerability scan
+        docker scout cves ${{ matrix.image.name }}:test --format sarif --output scout-${{ matrix.image.name }}.sarif || true
+      continue-on-error: true
+
+    - name: Upload Docker Scout results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'scout-${{ matrix.image.name }}.sarif'
+      continue-on-error: true
+
+    - name: Generate container bill of materials (SBOM)
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ matrix.image.name }}:test
+        format: spdx-json
+        output-file: sbom-${{ matrix.image.name }}.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-${{ matrix.image.name }}-${{ github.sha }}
+        path: sbom-${{ matrix.image.name }}.spdx.json
+        retention-days: 90
+
+    - name: Container image analysis with Dockle
+      run: |
+        # Install Dockle
+        VERSION=$(curl --silent "https://api.github.com/repos/goodwithtech/dockle/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+        curl -L -o dockle.deb https://github.com/goodwithtech/dockle/releases/download/v${VERSION}/dockle_${VERSION}_Linux-64bit.deb
+        sudo dpkg -i dockle.deb
+        
+        # Run Dockle security analysis
+        dockle --format json --output dockle-${{ matrix.image.name }}.json ${{ matrix.image.name }}:test
+
+    - name: Upload Dockle results
+      uses: actions/upload-artifact@v4
+      with:
+        name: dockle-${{ matrix.image.name }}-${{ github.sha }}
+        path: dockle-${{ matrix.image.name }}.json
+        retention-days: 30
+
+  # Runtime Security Scanning
+  runtime-security:
+    name: Runtime Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Start test environment
+      run: |
+        # Start containers for runtime analysis
+        docker-compose -f docker-compose.test.yml up -d
+        sleep 60  # Wait for services to start
+
+    - name: Run Falco runtime security monitoring
+      run: |
+        # Install Falco
+        curl -s https://falco.org/repo/falcosecurity-packages.asc | sudo apt-key add -
+        echo "deb https://download.falco.org/packages/deb stable main" | sudo tee -a /etc/apt/sources.list.d/falcosecurity.list
+        sudo apt-get update -qq
+        sudo apt-get install -y falco
+        
+        # Configure Falco rules for containers
+        cat > custom-rules.yaml << 'EOF'
+        - rule: Unexpected outbound connection
+          desc: Detect unexpected outbound connections from containers
+          condition: >
+            outbound and fd.sip != "127.0.0.1" and
+            container and not proc.name in (known_outbound_processes)
+          output: >
+            Unexpected outbound connection (command=%proc.cmdline connection=%fd.name)
+          priority: WARNING
+        
+        - rule: Container filesystem write
+          desc: Detect writes to sensitive filesystem areas
+          condition: >
+            container and open_write and
+            (fd.name startswith /etc or fd.name startswith /usr/bin or fd.name startswith /bin)
+          output: >
+            Container write to sensitive filesystem (command=%proc.cmdline file=%fd.name)
+          priority: WARNING
+        EOF
+        
+        # Run Falco for 2 minutes
+        timeout 120 sudo falco -r custom-rules.yaml > falco-runtime.log 2>&1 || true
+
+    - name: Analyze runtime behavior
+      run: |
+        # Generate some activity for analysis
+        curl -f http://localhost:8080/health || true
+        curl -f http://localhost:3000/api/health || true
+        
+        # Check for suspicious activities
+        if grep -q "WARNING" falco-runtime.log; then
+          echo "Security warnings detected in runtime analysis:"
+          cat falco-runtime.log
+        fi
+
+    - name: Upload runtime security results
+      uses: actions/upload-artifact@v4
+      with:
+        name: runtime-security-${{ github.sha }}
+        path: falco-runtime.log
+        retention-days: 30
+
+    - name: Stop test environment
+      if: always()
+      run: docker-compose -f docker-compose.test.yml down -v
+
+  # Container Registry Security
+  registry-security:
+    name: Container Registry Security
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Scan registry images with Trivy
+      run: |
+        # Scan existing images in registry
+        IMAGES=(
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api-gateway:latest"
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cobol-compiler:latest"
+        )
+        
+        for image in "${IMAGES[@]}"; do
+          echo "Scanning ${image}..."
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image --format json --output registry-scan-$(basename ${image}).json ${image} || true
+        done
+
+    - name: Upload registry scan results
+      uses: actions/upload-artifact@v4
+      with:
+        name: registry-security-scan-${{ github.sha }}
+        path: registry-scan-*.json
+        retention-days: 30
+
+  # Security Policy Compliance
+  compliance-check:
+    name: Security Compliance Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check Docker Compose security
+      run: |
+        # Check for security issues in docker-compose files
+        echo "Checking Docker Compose security configurations..."
+        
+        # Check for privileged containers
+        if grep -r "privileged.*true" docker-compose*.yml; then
+          echo "ERROR: Privileged containers detected"
+          exit 1
+        fi
+        
+        # Check for host network mode
+        if grep -r "network_mode.*host" docker-compose*.yml; then
+          echo "WARNING: Host network mode detected"
+        fi
+        
+        # Check for volume mounts
+        if grep -r "/var/run/docker.sock" docker-compose*.yml; then
+          echo "WARNING: Docker socket mount detected"
+        fi
+        
+        # Check for secrets in environment variables
+        if grep -r -i "password\|secret\|key.*=" docker-compose*.yml | grep -v "secret-key-here"; then
+          echo "WARNING: Potential secrets in environment variables"
+        fi
+
+    - name: Validate Kubernetes security policies
+      run: |
+        # Install OPA Conftest for policy validation
+        curl -L -o conftest.tar.gz https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.46.0_Linux_x86_64.tar.gz
+        tar xzf conftest.tar.gz
+        sudo mv conftest /usr/local/bin
+        
+        # Create security policies
+        mkdir -p policies
+        cat > policies/security.rego << 'EOF'
+        package kubernetes.security
+        
+        deny[msg] {
+          input.kind == "Deployment"
+          input.spec.template.spec.containers[_].securityContext.privileged == true
+          msg := "Privileged containers are not allowed"
+        }
+        
+        deny[msg] {
+          input.kind == "Deployment"
+          input.spec.template.spec.hostNetwork == true
+          msg := "Host network access is not allowed"
+        }
+        
+        deny[msg] {
+          input.kind == "Deployment"
+          not input.spec.template.spec.containers[_].resources.limits
+          msg := "Resource limits must be specified"
+        }
+        EOF
+        
+        # Validate Kubernetes manifests
+        conftest verify --policy policies kubernetes/base/*.yaml
+
+    - name: Generate security report
+      run: |
+        echo "# Container Security Report" > security-report.md
+        echo "Generated on: $(date)" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## Security Scans Performed" >> security-report.md
+        echo "- Dockerfile security linting (Hadolint)" >> security-report.md
+        echo "- Container vulnerability scanning (Trivy, Grype, Snyk)" >> security-report.md
+        echo "- Runtime security monitoring (Falco)" >> security-report.md
+        echo "- Container registry security scanning" >> security-report.md
+        echo "- Security policy compliance checking" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## Recommendations" >> security-report.md
+        echo "- Regularly update base images" >> security-report.md
+        echo "- Use non-root users in containers" >> security-report.md
+        echo "- Implement resource limits" >> security-report.md
+        echo "- Enable security contexts" >> security-report.md
+        echo "- Monitor runtime behavior" >> security-report.md
+
+    - name: Upload security report
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-report-${{ github.sha }}
+        path: security-report.md
+        retention-days: 90
+
+  # Security notification
+  security-notification:
+    name: Security Notification
+    runs-on: ubuntu-latest
+    needs: [dockerfile-security, container-scan, runtime-security, compliance-check]
+    if: always()
+    
+    steps:
+    - name: Determine security status
+      id: security-status
+      run: |
+        # Check if any security jobs failed
+        if [[ "${{ needs.dockerfile-security.result }}" == "failure" ]] || \
+           [[ "${{ needs.container-scan.result }}" == "failure" ]] || \
+           [[ "${{ needs.runtime-security.result }}" == "failure" ]] || \
+           [[ "${{ needs.compliance-check.result }}" == "failure" ]]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=Security scanning detected critical issues" >> $GITHUB_OUTPUT
+        else
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=All security scans completed successfully" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Notify security team
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ steps.security-status.outputs.status }}
+        text: |
+          🔒 Container Security Scan Report
+          Status: ${{ steps.security-status.outputs.message }}
+          Commit: ${{ github.sha }}
+          Branch: ${{ github.ref_name }}
+          View Results: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        webhook_url: ${{ secrets.SECURITY_SLACK_WEBHOOK }}
+      if: steps.security-status.outputs.status == 'failure' || github.event_name == 'schedule'

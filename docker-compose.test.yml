@@ -1,0 +1,269 @@
+version: '3.8'
+
+services:
+  # Redis for caching and job queues
+  redis-test:
+    image: redis:7-alpine
+    container_name: cobol-bridge-redis-test
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL database for testing
+  mysql-test:
+    image: mysql:8.0
+    container_name: cobol-bridge-mysql-test
+    environment:
+      MYSQL_ROOT_PASSWORD: test_root_password
+      MYSQL_DATABASE: suitecrm_test
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: test_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # API Gateway with test configuration
+  api-gateway-test:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: test
+    container_name: cobol-bridge-api-test
+    environment:
+      NODE_ENV: test
+      PORT: 3000
+      REDIS_URL: redis://redis-test:6379
+      JWT_SECRET: test-jwt-secret-key-for-testing-only
+      COBOL_BIN_PATH: /compiled
+      COBOL_TEMP_PATH: /tmp/cobol-exec
+      COBOL_ALLOWED_PROGRAMS: CREDIT01,PAYROLL01,INTEREST01,TEST_PROGRAM
+      DB_HOST: mysql-test
+      DB_DATABASE: suitecrm_test
+      DB_USERNAME: test_user
+      DB_PASSWORD: test_password
+      ALLOWED_ORIGINS: http://localhost:8080,http://localhost:3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./cobol-core:/cobol-core:ro
+      - cobol_compiled_test:/compiled
+      - ./api-gateway/tests:/app/tests
+    depends_on:
+      redis-test:
+        condition: service_healthy
+      mysql-test:
+        condition: service_healthy
+      cobol-compiler-test:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # COBOL compiler service
+  cobol-compiler-test:
+    image: ubuntu:22.04
+    container_name: cobol-compiler-test
+    command: >
+      bash -c "
+        apt-get update &&
+        apt-get install -y gnucobol-3 &&
+        cd /cobol-core &&
+        mkdir -p /compiled &&
+        for file in *.cob; do
+          if [ -f \"$$file\" ]; then
+            echo \"Compiling $$file...\";
+            cobc -x -o \"/compiled/$${file%.cob}\" \"$$file\" || echo \"Failed to compile $$file\";
+          fi
+        done &&
+        echo 'COBOL compilation complete'
+      "
+    volumes:
+      - ./cobol-core:/cobol-core:ro
+      - cobol_compiled_test:/compiled
+    
+  # SuiteCRM for integration testing
+  suitecrm-test:
+    image: php:8.1-apache
+    container_name: cobol-bridge-suitecrm-test
+    environment:
+      APACHE_DOCUMENT_ROOT: /var/www/html
+      PHP_UPLOAD_MAX_FILESIZE: 50M
+      PHP_POST_MAX_SIZE: 50M
+      PHP_MEMORY_LIMIT: 512M
+      SUITECRM_DATABASE_HOST: mysql-test
+      SUITECRM_DATABASE_NAME: suitecrm_test
+      SUITECRM_DATABASE_USER: test_user
+      SUITECRM_DATABASE_PASSWORD: test_password
+      COBOL_API_URL: http://api-gateway-test:3000/api/v1
+      COBOL_API_KEY: test-api-key-12345
+    ports:
+      - "8080:80"
+    volumes:
+      - ./suitecrm-integration:/var/www/html
+      - ./suitecrm-integration/tests:/var/www/html/tests
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+      api-gateway-test:
+        condition: service_healthy
+    command: >
+      bash -c "
+        apt-get update &&
+        apt-get install -y libzip-dev zip unzip curl &&
+        docker-php-ext-install pdo pdo_mysql zip &&
+        apache2-foreground
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/index.php"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # Cloud Burst service for testing
+  cloud-burst-test:
+    build:
+      context: ./cloud-burst
+      dockerfile: docker/Dockerfile.worker
+    container_name: cobol-bridge-cloud-burst-test
+    environment:
+      NODE_ENV: test
+      REDIS_URL: redis://redis-test:6379
+      DB_HOST: mysql-test
+      DB_DATABASE: suitecrm_test
+      DB_USERNAME: test_user
+      DB_PASSWORD: test_password
+      API_GATEWAY_URL: http://api-gateway-test:3000
+    depends_on:
+      redis-test:
+        condition: service_healthy
+      mysql-test:
+        condition: service_healthy
+    volumes:
+      - ./cloud-burst/tests:/app/tests
+
+  # Monitoring service for testing
+  monitoring-test:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile
+    container_name: cobol-bridge-monitoring-test
+    environment:
+      REACT_APP_API_URL: http://localhost:3000/api/v1
+      REACT_APP_WS_URL: ws://localhost:3000
+    ports:
+      - "3001:3000"
+    depends_on:
+      api-gateway-test:
+        condition: service_healthy
+
+  # Business Rules service for testing
+  business-rules-test:
+    build:
+      context: ./business-rules
+      dockerfile: Dockerfile
+    container_name: cobol-bridge-business-rules-test
+    environment:
+      REACT_APP_API_URL: http://localhost:3000/api/v1
+    ports:
+      - "3002:3000"
+    depends_on:
+      api-gateway-test:
+        condition: service_healthy
+
+  # Test data seeder
+  test-data-seeder:
+    image: node:18-alpine
+    container_name: cobol-bridge-test-seeder
+    working_dir: /app
+    command: >
+      sh -c "
+        echo 'Waiting for services to be ready...' &&
+        sleep 30 &&
+        echo 'Seeding test data...' &&
+        node seed-test-data.js &&
+        echo 'Test data seeding complete'
+      "
+    volumes:
+      - ./tests/fixtures:/app
+    environment:
+      API_BASE_URL: http://api-gateway-test:3000/api/v1
+      DB_HOST: mysql-test
+      DB_DATABASE: suitecrm_test
+      DB_USERNAME: test_user
+      DB_PASSWORD: test_password
+    depends_on:
+      api-gateway-test:
+        condition: service_healthy
+      suitecrm-test:
+        condition: service_healthy
+
+  # Nginx for load balancing in tests
+  nginx-test:
+    image: nginx:alpine
+    container_name: cobol-bridge-nginx-test
+    ports:
+      - "8081:80"
+    volumes:
+      - ./nginx/nginx-test.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api-gateway-test
+      - suitecrm-test
+
+  # Prometheus for monitoring tests
+  prometheus-test:
+    image: prom/prometheus:latest
+    container_name: cobol-bridge-prometheus-test
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-test.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=1h'
+      - '--web.enable-lifecycle'
+
+  # Test results collector
+  test-collector:
+    image: node:18-alpine
+    container_name: cobol-bridge-test-collector
+    working_dir: /app
+    command: >
+      sh -c "
+        echo 'Test collector started' &&
+        tail -f /dev/null
+      "
+    volumes:
+      - ./tests:/app/tests
+      - test_results:/app/results
+    environment:
+      TEST_RESULTS_PATH: /app/results
+
+volumes:
+  mysql_test_data:
+    driver: local
+  cobol_compiled_test:
+    driver: local
+  test_results:
+    driver: local
+
+networks:
+  default:
+    name: cobol-bridge-test-network
+    driver: bridge

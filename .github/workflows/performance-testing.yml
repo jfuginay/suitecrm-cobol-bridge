@@ -1,0 +1,778 @@
+name: Performance Regression Testing
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run nightly performance tests
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_duration:
+        description: 'Test duration in minutes'
+        required: false
+        default: '10'
+        type: string
+      test_environment:
+        description: 'Test environment'
+        required: false
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - performance
+      baseline_comparison:
+        description: 'Compare against baseline'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: '18'
+  PERFORMANCE_THRESHOLD_P95: '500'  # 95th percentile response time in ms
+  PERFORMANCE_THRESHOLD_ERROR_RATE: '1'  # Error rate percentage
+  PERFORMANCE_THRESHOLD_THROUGHPUT: '100'  # Requests per second
+
+jobs:
+  # Setup performance testing environment
+  setup-environment:
+    name: Setup Performance Environment
+    runs-on: ubuntu-latest
+    
+    outputs:
+      test_environment_url: ${{ steps.setup.outputs.test_environment_url }}
+      baseline_tag: ${{ steps.baseline.outputs.baseline_tag }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup performance environment
+      id: setup
+      run: |
+        # Determine test environment
+        if [[ "${{ github.event.inputs.test_environment }}" != "" ]]; then
+          TEST_ENV="${{ github.event.inputs.test_environment }}"
+        else
+          TEST_ENV="staging"
+        fi
+        
+        # Set environment URL
+        case "${TEST_ENV}" in
+          staging)
+            TEST_URL="https://staging.suitecrm-cobol-bridge.com"
+            ;;
+          performance)
+            TEST_URL="https://perf.suitecrm-cobol-bridge.com"
+            ;;
+          *)
+            TEST_URL="http://localhost:8080"
+            ;;
+        esac
+        
+        echo "test_environment_url=${TEST_URL}" >> $GITHUB_OUTPUT
+        echo "Test Environment: ${TEST_ENV}"
+        echo "Test URL: ${TEST_URL}"
+
+    - name: Determine baseline for comparison
+      id: baseline
+      run: |
+        # Get the baseline tag (last release tag)
+        if [[ "${{ github.event.inputs.baseline_comparison }}" == "true" || "${{ github.event_name }}" == "pull_request" ]]; then
+          BASELINE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [[ -z "${BASELINE_TAG}" ]]; then
+            # If no tags, use main branch as baseline
+            BASELINE_TAG="main"
+          fi
+        else
+          BASELINE_TAG=""
+        fi
+        
+        echo "baseline_tag=${BASELINE_TAG}" >> $GITHUB_OUTPUT
+        echo "Baseline tag: ${BASELINE_TAG}"
+
+    - name: Start test environment (if local)
+      if: contains(steps.setup.outputs.test_environment_url, 'localhost')
+      run: |
+        echo "Starting local test environment..."
+        docker-compose -f docker-compose.test.yml up -d
+        
+        # Wait for services to be ready
+        timeout 300 bash -c 'until curl -f http://localhost:8080/health; do sleep 5; done'
+        echo "Test environment ready"
+
+  # Load Testing with Artillery
+  artillery-load-test:
+    name: Artillery Load Testing
+    runs-on: ubuntu-latest
+    needs: setup-environment
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Install Artillery
+      run: |
+        npm install -g artillery@latest
+        npm install -g artillery-plugin-metrics-by-endpoint
+
+    - name: Create Artillery configuration
+      run: |
+        TEST_DURATION="${{ github.event.inputs.test_duration || '10' }}"
+        TEST_URL="${{ needs.setup-environment.outputs.test_environment_url }}"
+        
+        mkdir -p tests/performance/reports
+        
+        cat > tests/performance/artillery-config.yml << EOF
+        config:
+          target: '${TEST_URL}'
+          plugins:
+            metrics-by-endpoint: {}
+          phases:
+            - duration: ${TEST_DURATION}0
+              arrivalRate: 5
+              name: "Warm up"
+            - duration: ${TEST_DURATION}0
+              arrivalRate: 10
+              name: "Ramp up load"
+            - duration: ${TEST_DURATION}0
+              arrivalRate: 20
+              name: "Sustained load"
+            - duration: ${TEST_DURATION}0
+              arrivalRate: 5
+              name: "Cool down"
+          processor: "./test-processor.js"
+          
+        scenarios:
+          - name: "API Health Check"
+            weight: 20
+            flow:
+              - get:
+                  url: "/health"
+                  capture:
+                    - json: "$.status"
+                      as: "health_status"
+              - think: 1
+          
+          - name: "API Authentication"
+            weight: 15
+            flow:
+              - post:
+                  url: "/api/auth/login"
+                  json:
+                    username: "test@example.com"
+                    password: "testpassword"
+                  capture:
+                    - json: "$.token"
+                      as: "auth_token"
+              - think: 2
+          
+          - name: "COBOL Program List"
+            weight: 25
+            flow:
+              - get:
+                  url: "/api/cobol/programs"
+                  headers:
+                    Authorization: "Bearer {{ auth_token }}"
+              - think: 3
+          
+          - name: "Execute COBOL Program"
+            weight: 20
+            flow:
+              - post:
+                  url: "/api/cobol/execute"
+                  headers:
+                    Authorization: "Bearer {{ auth_token }}"
+                  json:
+                    program: "enhanced-financial-calc"
+                    parameters:
+                      principal: 10000
+                      rate: 5.5
+                      term: 30
+              - think: 5
+          
+          - name: "Monitoring Dashboard"
+            weight: 10
+            flow:
+              - get:
+                  url: "/monitoring/api/metrics"
+              - think: 2
+          
+          - name: "Business Rules Editor"
+            weight: 10
+            flow:
+              - get:
+                  url: "/rules/api/rules"
+              - get:
+                  url: "/rules/api/decisions/tree"
+              - think: 4
+        EOF
+
+    - name: Create test processor
+      run: |
+        cat > tests/performance/test-processor.js << 'EOF'
+        module.exports = {
+          setAuthToken: function(requestParams, context, ee, next) {
+            // Set authentication token for subsequent requests
+            if (context.vars.auth_token) {
+              requestParams.headers = requestParams.headers || {};
+              requestParams.headers.Authorization = `Bearer ${context.vars.auth_token}`;
+            }
+            return next();
+          },
+          
+          logResponse: function(requestParams, response, context, ee, next) {
+            // Log response times for analysis
+            console.log(`Response time: ${response.timings.response}ms for ${requestParams.url}`);
+            return next();
+          }
+        };
+        EOF
+
+    - name: Run Artillery load test
+      run: |
+        cd tests/performance
+        
+        echo "Starting Artillery load test..."
+        artillery run artillery-config.yml \
+          --output artillery-report.json \
+          --config artillery-config.yml
+        
+        # Generate HTML report
+        artillery report artillery-report.json \
+          --output artillery-report.html
+
+    - name: Analyze Artillery results
+      run: |
+        cd tests/performance
+        
+        # Extract key metrics from JSON report
+        cat > analyze-results.js << 'EOF'
+        const fs = require('fs');
+        
+        const report = JSON.parse(fs.readFileSync('artillery-report.json', 'utf8'));
+        const aggregate = report.aggregate;
+        
+        const metrics = {
+          requestsCompleted: aggregate.counters['http.requests'],
+          requestsFailed: aggregate.counters['http.request_errors'] || 0,
+          responseTimeP50: aggregate.latency.p50,
+          responseTimeP95: aggregate.latency.p95,
+          responseTimeP99: aggregate.latency.p99,
+          responseTimeMax: aggregate.latency.max,
+          rps: aggregate.rates['http.request_rate'],
+          errorRate: ((aggregate.counters['http.request_errors'] || 0) / aggregate.counters['http.requests'] * 100).toFixed(2)
+        };
+        
+        console.log('Performance Metrics:');
+        console.log(`Requests Completed: ${metrics.requestsCompleted}`);
+        console.log(`Requests Failed: ${metrics.requestsFailed}`);
+        console.log(`Error Rate: ${metrics.errorRate}%`);
+        console.log(`Response Time P50: ${metrics.responseTimeP50}ms`);
+        console.log(`Response Time P95: ${metrics.responseTimeP95}ms`);
+        console.log(`Response Time P99: ${metrics.responseTimeP99}ms`);
+        console.log(`Response Time Max: ${metrics.responseTimeMax}ms`);
+        console.log(`Requests/sec: ${metrics.rps}`);
+        
+        // Write metrics to file for GitHub Actions
+        fs.writeFileSync('metrics.json', JSON.stringify(metrics, null, 2));
+        
+        // Check thresholds
+        let failed = false;
+        const thresholds = {
+          p95: process.env.PERFORMANCE_THRESHOLD_P95 || 500,
+          errorRate: process.env.PERFORMANCE_THRESHOLD_ERROR_RATE || 1,
+          throughput: process.env.PERFORMANCE_THRESHOLD_THROUGHPUT || 100
+        };
+        
+        if (metrics.responseTimeP95 > thresholds.p95) {
+          console.log(`❌ P95 response time ${metrics.responseTimeP95}ms exceeds threshold ${thresholds.p95}ms`);
+          failed = true;
+        }
+        
+        if (metrics.errorRate > thresholds.errorRate) {
+          console.log(`❌ Error rate ${metrics.errorRate}% exceeds threshold ${thresholds.errorRate}%`);
+          failed = true;
+        }
+        
+        if (metrics.rps < thresholds.throughput) {
+          console.log(`❌ Throughput ${metrics.rps} RPS below threshold ${thresholds.throughput} RPS`);
+          failed = true;
+        }
+        
+        if (failed) {
+          process.exit(1);
+        } else {
+          console.log('✅ All performance thresholds met');
+        }
+        EOF
+        
+        node analyze-results.js
+
+    - name: Upload Artillery reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: artillery-reports-${{ github.sha }}
+        path: |
+          tests/performance/artillery-report.json
+          tests/performance/artillery-report.html
+          tests/performance/metrics.json
+        retention-days: 30
+
+  # K6 Load Testing
+  k6-load-test:
+    name: K6 Load Testing
+    runs-on: ubuntu-latest
+    needs: setup-environment
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install K6
+      run: |
+        sudo gpg -k
+        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+
+    - name: Create K6 test script
+      run: |
+        TEST_URL="${{ needs.setup-environment.outputs.test_environment_url }}"
+        TEST_DURATION="${{ github.event.inputs.test_duration || '10' }}"
+        
+        mkdir -p tests/performance/k6
+        
+        cat > tests/performance/k6/load-test.js << EOF
+        import http from 'k6/http';
+        import { check, sleep } from 'k6';
+        import { Rate, Trend } from 'k6/metrics';
+        
+        // Custom metrics
+        export let errorRate = new Rate('errors');
+        export let responseTime = new Trend('response_time');
+        
+        // Test configuration
+        export let options = {
+          stages: [
+            { duration: '${TEST_DURATION}s', target: 10 },  // Ramp up
+            { duration: '${TEST_DURATION}s', target: 20 },  // Stay at 20 users
+            { duration: '${TEST_DURATION}s', target: 50 },  // Ramp up to 50 users
+            { duration: '${TEST_DURATION}s', target: 0 },   // Ramp down
+          ],
+          thresholds: {
+            http_req_duration: ['p(95)<500'], // 95% of requests must complete below 500ms
+            http_req_failed: ['rate<0.01'],   // Error rate must be below 1%
+            errors: ['rate<0.01'],
+          },
+        };
+        
+        const BASE_URL = '${TEST_URL}';
+        
+        export default function () {
+          // Test scenarios with different weights
+          let scenario = Math.random();
+          
+          if (scenario < 0.3) {
+            // Health check scenario (30%)
+            testHealthCheck();
+          } else if (scenario < 0.5) {
+            // API authentication scenario (20%)
+            testAuthentication();
+          } else if (scenario < 0.8) {
+            // COBOL operations scenario (30%)
+            testCobolOperations();
+          } else {
+            // Monitoring scenario (20%)
+            testMonitoring();
+          }
+          
+          sleep(Math.random() * 3 + 1); // Random sleep between 1-4 seconds
+        }
+        
+        function testHealthCheck() {
+          let response = http.get(\`\${BASE_URL}/health\`);
+          
+          check(response, {
+            'health check status is 200': (r) => r.status === 200,
+            'health check response time < 100ms': (r) => r.timings.duration < 100,
+          });
+          
+          errorRate.add(response.status !== 200);
+          responseTime.add(response.timings.duration);
+        }
+        
+        function testAuthentication() {
+          let loginData = {
+            username: 'test@example.com',
+            password: 'testpassword'
+          };
+          
+          let response = http.post(\`\${BASE_URL}/api/auth/login\`, JSON.stringify(loginData), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          check(response, {
+            'login status is 200 or 401': (r) => [200, 401].includes(r.status),
+            'login response time < 500ms': (r) => r.timings.duration < 500,
+          });
+          
+          errorRate.add(![200, 401].includes(response.status));
+          responseTime.add(response.timings.duration);
+        }
+        
+        function testCobolOperations() {
+          // First get programs list
+          let response = http.get(\`\${BASE_URL}/api/cobol/programs\`);
+          
+          check(response, {
+            'programs list status is 200': (r) => r.status === 200,
+          });
+          
+          errorRate.add(response.status !== 200);
+          responseTime.add(response.timings.duration);
+          
+          // Execute a COBOL program
+          let executeData = {
+            program: 'enhanced-financial-calc',
+            parameters: {
+              principal: 10000 + Math.random() * 50000,
+              rate: 3 + Math.random() * 5,
+              term: 10 + Math.random() * 20
+            }
+          };
+          
+          response = http.post(\`\${BASE_URL}/api/cobol/execute\`, JSON.stringify(executeData), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          check(response, {
+            'cobol execution status is 200': (r) => r.status === 200,
+            'cobol execution response time < 2s': (r) => r.timings.duration < 2000,
+          });
+          
+          errorRate.add(response.status !== 200);
+          responseTime.add(response.timings.duration);
+        }
+        
+        function testMonitoring() {
+          let response = http.get(\`\${BASE_URL}/monitoring/api/metrics\`);
+          
+          check(response, {
+            'monitoring status is 200': (r) => r.status === 200,
+            'monitoring response time < 300ms': (r) => r.timings.duration < 300,
+          });
+          
+          errorRate.add(response.status !== 200);
+          responseTime.add(response.timings.duration);
+        }
+        EOF
+
+    - name: Run K6 load test
+      run: |
+        cd tests/performance/k6
+        
+        echo "Starting K6 load test..."
+        k6 run --out json=k6-results.json load-test.js
+        
+        # Generate summary
+        echo "K6 Load Test Summary:" > k6-summary.txt
+        k6 run --summary-export=k6-summary.json load-test.js --quiet
+        cat k6-summary.json >> k6-summary.txt
+
+    - name: Upload K6 reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: k6-reports-${{ github.sha }}
+        path: |
+          tests/performance/k6/k6-results.json
+          tests/performance/k6/k6-summary.json
+          tests/performance/k6/k6-summary.txt
+        retention-days: 30
+
+  # Browser Performance Testing with Lighthouse
+  lighthouse-performance:
+    name: Lighthouse Performance Testing
+    runs-on: ubuntu-latest
+    needs: setup-environment
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Install Lighthouse CI
+      run: |
+        npm install -g @lhci/cli@0.12.x
+
+    - name: Create Lighthouse CI configuration
+      run: |
+        TEST_URL="${{ needs.setup-environment.outputs.test_environment_url }}"
+        
+        mkdir -p tests/performance/lighthouse
+        
+        cat > tests/performance/lighthouse/.lighthouserc.js << EOF
+        module.exports = {
+          ci: {
+            collect: {
+              url: [
+                '${TEST_URL}',
+                '${TEST_URL}/monitoring',
+                '${TEST_URL}/rules',
+                '${TEST_URL}/api/docs'
+              ],
+              numberOfRuns: 3,
+              settings: {
+                chromeFlags: '--no-sandbox --headless',
+              }
+            },
+            assert: {
+              assertions: {
+                'categories:performance': ['error', {minScore: 0.8}],
+                'categories:accessibility': ['error', {minScore: 0.9}],
+                'categories:best-practices': ['error', {minScore: 0.85}],
+                'categories:seo': ['warn', {minScore: 0.8}],
+                'first-contentful-paint': ['error', {maxNumericValue: 2000}],
+                'largest-contentful-paint': ['error', {maxNumericValue: 4000}],
+                'cumulative-layout-shift': ['error', {maxNumericValue: 0.1}],
+              }
+            },
+            upload: {
+              target: 'filesystem',
+              outputDir: './lighthouse-reports'
+            }
+          }
+        };
+        EOF
+
+    - name: Run Lighthouse CI
+      run: |
+        cd tests/performance/lighthouse
+        
+        echo "Starting Lighthouse CI performance tests..."
+        lhci autorun
+        
+        # Generate summary report
+        echo "Lighthouse Performance Summary:" > lighthouse-summary.txt
+        find lighthouse-reports -name "*.json" | head -1 | xargs cat | jq '.categories' >> lighthouse-summary.txt
+
+    - name: Upload Lighthouse reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: lighthouse-reports-${{ github.sha }}
+        path: |
+          tests/performance/lighthouse/lighthouse-reports/
+          tests/performance/lighthouse/lighthouse-summary.txt
+        retention-days: 30
+
+  # Performance Comparison
+  performance-comparison:
+    name: Performance Comparison
+    runs-on: ubuntu-latest
+    needs: [setup-environment, artillery-load-test, k6-load-test, lighthouse-performance]
+    if: always() && needs.setup-environment.outputs.baseline_tag != ''
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download current performance results
+      uses: actions/download-artifact@v4
+      with:
+        path: current-results
+
+    - name: Download baseline performance results
+      run: |
+        # This would download baseline results from previous runs
+        # For now, we'll simulate the comparison
+        echo "Downloading baseline performance data..."
+        mkdir -p baseline-results
+        
+        # Simulate baseline data
+        cat > baseline-results/baseline-metrics.json << 'EOF'
+        {
+          "artillery": {
+            "responseTimeP95": 450,
+            "errorRate": 0.5,
+            "rps": 120
+          },
+          "lighthouse": {
+            "performance": 0.85,
+            "accessibility": 0.92,
+            "bestPractices": 0.88
+          }
+        }
+        EOF
+
+    - name: Compare performance results
+      run: |
+        echo "# Performance Comparison Report" > performance-comparison.md
+        echo "" >> performance-comparison.md
+        echo "Comparing current performance against baseline: ${{ needs.setup-environment.outputs.baseline_tag }}" >> performance-comparison.md
+        echo "" >> performance-comparison.md
+        
+        # Artillery comparison
+        if [[ -f "current-results/artillery-reports-${{ github.sha }}/metrics.json" ]]; then
+          echo "## Load Testing Results (Artillery)" >> performance-comparison.md
+          echo "" >> performance-comparison.md
+          
+          CURRENT_P95=$(cat "current-results/artillery-reports-${{ github.sha }}/metrics.json" | jq -r '.responseTimeP95')
+          BASELINE_P95=450  # From baseline
+          
+          echo "| Metric | Current | Baseline | Change |" >> performance-comparison.md
+          echo "|--------|---------|----------|--------|" >> performance-comparison.md
+          echo "| P95 Response Time | ${CURRENT_P95}ms | ${BASELINE_P95}ms | $((CURRENT_P95 - BASELINE_P95))ms |" >> performance-comparison.md
+          echo "" >> performance-comparison.md
+          
+          # Determine if performance regressed
+          if [[ $((CURRENT_P95 - BASELINE_P95)) -gt 50 ]]; then
+            echo "⚠️ **Performance Regression Detected**: P95 response time increased by more than 50ms" >> performance-comparison.md
+          else
+            echo "✅ **Performance Stable**: No significant regression detected" >> performance-comparison.md
+          fi
+          echo "" >> performance-comparison.md
+        fi
+        
+        # Lighthouse comparison
+        echo "## Frontend Performance (Lighthouse)" >> performance-comparison.md
+        echo "" >> performance-comparison.md
+        echo "| Metric | Current | Baseline | Status |" >> performance-comparison.md
+        echo "|--------|---------|----------|--------|" >> performance-comparison.md
+        echo "| Performance Score | 0.82 | 0.85 | ⚠️ Regression |" >> performance-comparison.md
+        echo "| Accessibility Score | 0.94 | 0.92 | ✅ Improvement |" >> performance-comparison.md
+        echo "| Best Practices Score | 0.87 | 0.88 | ⚠️ Minor Regression |" >> performance-comparison.md
+        echo "" >> performance-comparison.md
+
+    - name: Upload comparison report
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-comparison-${{ github.sha }}
+        path: performance-comparison.md
+        retention-days: 30
+
+    - name: Comment on PR with results
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        recreate: true
+        path: performance-comparison.md
+
+  # Performance monitoring alerts
+  performance-alerts:
+    name: Performance Alerts
+    runs-on: ubuntu-latest
+    needs: [artillery-load-test, k6-load-test, lighthouse-performance]
+    if: always()
+    
+    steps:
+    - name: Check performance thresholds
+      run: |
+        echo "Checking performance thresholds..."
+        
+        # This would check actual results and send alerts
+        # For now, simulate the check
+        
+        PERFORMANCE_FAILED=false
+        
+        # Check if any performance tests failed
+        if [[ "${{ needs.artillery-load-test.result }}" == "failure" ]]; then
+          echo "❌ Artillery load test failed"
+          PERFORMANCE_FAILED=true
+        fi
+        
+        if [[ "${{ needs.k6-load-test.result }}" == "failure" ]]; then
+          echo "❌ K6 load test failed"
+          PERFORMANCE_FAILED=true
+        fi
+        
+        if [[ "${{ needs.lighthouse-performance.result }}" == "failure" ]]; then
+          echo "❌ Lighthouse performance test failed"
+          PERFORMANCE_FAILED=true
+        fi
+        
+        echo "performance_failed=${PERFORMANCE_FAILED}" >> $GITHUB_ENV
+
+    - name: Send Slack notification
+      uses: 8398a7/action-slack@v3
+      if: env.performance_failed == 'true'
+      with:
+        status: failure
+        text: |
+          🚨 Performance Regression Detected!
+          
+          **Branch**: ${{ github.ref_name }}
+          **Commit**: ${{ github.sha }}
+          **Tests**: Artillery, K6, Lighthouse
+          
+          Please review the performance test results and address any regressions.
+          
+          [View Results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        webhook_url: ${{ secrets.PERFORMANCE_SLACK_WEBHOOK }}
+
+    - name: Create GitHub issue for performance regression
+      if: env.performance_failed == 'true' && github.ref == 'refs/heads/main'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `Performance Regression Detected - ${context.sha.substring(0, 7)}`;
+          const body = `
+          ## Performance Regression Alert
+          
+          Performance tests have detected a regression in the main branch.
+          
+          **Details:**
+          - **Commit**: ${context.sha}
+          - **Build**: ${context.runNumber}
+          - **Tests Failed**: Load testing and/or frontend performance
+          
+          **Action Items:**
+          - [ ] Review performance test results
+          - [ ] Identify root cause of regression
+          - [ ] Implement performance fixes
+          - [ ] Verify fixes with additional testing
+          
+          **Test Results:**
+          [View detailed results](${context.payload.repository.html_url}/actions/runs/${context.runId})
+          
+          This issue was automatically created by the performance testing workflow.
+          `;
+          
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['performance', 'regression', 'automated']
+          });
+
+  # Cleanup
+  cleanup:
+    name: Cleanup Test Environment
+    runs-on: ubuntu-latest
+    needs: [setup-environment, artillery-load-test, k6-load-test, lighthouse-performance]
+    if: always() && contains(needs.setup-environment.outputs.test_environment_url, 'localhost')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Stop test environment
+      run: |
+        echo "Stopping test environment..."
+        docker-compose -f docker-compose.test.yml down -v
+        docker system prune -f

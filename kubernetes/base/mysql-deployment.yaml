@@ -1,0 +1,268 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-primary
+  namespace: suitecrm-cobol
+  labels:
+    app: mysql
+    component: primary
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: mysql
+    component: primary
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-read
+  namespace: suitecrm-cobol
+  labels:
+    app: mysql
+    component: replica
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: mysql
+    component: replica
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-primary
+  namespace: suitecrm-cobol
+spec:
+  serviceName: mysql-primary
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+      component: primary
+  template:
+    metadata:
+      labels:
+        app: mysql
+        component: primary
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_PASSWORD
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_NAME
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_USER
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_PASSWORD
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+        - name: mysql-config
+          mountPath: /etc/mysql/conf.d
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - mysql
+            - -h
+            - localhost
+            - -e
+            - "SELECT 1"
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+      - name: init-scripts
+        configMap:
+          name: mysql-init-scripts
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "fast-ssd"
+      resources:
+        requests:
+          storage: 100Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-replica
+  namespace: suitecrm-cobol
+spec:
+  serviceName: mysql-read
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mysql
+      component: replica
+  template:
+    metadata:
+      labels:
+        app: mysql
+        component: replica
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_PASSWORD
+        - name: MYSQL_REPLICATION_MODE
+          value: "slave"
+        - name: MYSQL_MASTER_HOST
+          value: "mysql-primary"
+        - name: MYSQL_REPLICATION_USER
+          value: "repl"
+        - name: MYSQL_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: DB_PASSWORD
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+        - name: mysql-config
+          mountPath: /etc/mysql/conf.d
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "0.5"
+          limits:
+            memory: "4Gi"
+            cpu: "1"
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - mysql
+            - -h
+            - localhost
+            - -e
+            - "SELECT 1"
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "fast-ssd"
+      resources:
+        requests:
+          storage: 100Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  namespace: suitecrm-cobol
+data:
+  my.cnf: |
+    [mysqld]
+    # Basic Settings
+    default_authentication_plugin = mysql_native_password
+    skip-name-resolve
+    max_connections = 500
+    max_allowed_packet = 64M
+    
+    # InnoDB Settings
+    innodb_buffer_pool_size = 2G
+    innodb_log_file_size = 512M
+    innodb_flush_log_at_trx_commit = 2
+    innodb_flush_method = O_DIRECT
+    innodb_file_per_table = 1
+    
+    # Replication Settings
+    server-id = 1
+    log_bin = mysql-bin
+    binlog_format = ROW
+    expire_logs_days = 7
+    
+    # Performance Schema
+    performance_schema = ON
+    
+    # Slow Query Log
+    slow_query_log = 1
+    slow_query_log_file = /var/log/mysql/slow.log
+    long_query_time = 2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init-scripts
+  namespace: suitecrm-cobol
+data:
+  01-init.sql: |
+    -- Create replication user
+    CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+    GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
+    FLUSH PRIVILEGES;
+    
+    -- Create monitoring user
+    CREATE USER IF NOT EXISTS 'monitor'@'%' IDENTIFIED BY 'monitor123';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'monitor'@'%';
+    FLUSH PRIVILEGES;

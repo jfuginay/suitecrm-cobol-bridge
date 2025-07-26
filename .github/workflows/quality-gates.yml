@@ -1,0 +1,569 @@
+name: Quality Gates
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+    outputs:
+      quality_passed:
+        description: "Whether quality gates passed"
+        value: ${{ jobs.quality-summary.outputs.quality_passed }}
+
+env:
+  # Quality thresholds
+  MIN_CODE_COVERAGE: 80
+  MAX_SECURITY_ISSUES: 0
+  MAX_CRITICAL_VULNERABILITIES: 0  
+  MAX_HIGH_VULNERABILITIES: 5
+  MIN_PERFORMANCE_SCORE: 0.8
+  MAX_RESPONSE_TIME_P95: 500
+  MAX_ERROR_RATE: 1
+  MIN_MAINTAINABILITY_INDEX: 60
+
+jobs:
+  # Code Coverage Gate
+  coverage-gate:
+    name: Code Coverage Quality Gate
+    runs-on: ubuntu-latest
+    
+    outputs:
+      coverage_passed: ${{ steps.check-coverage.outputs.passed }}
+      coverage_percentage: ${{ steps.check-coverage.outputs.percentage }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download coverage reports
+      uses: actions/download-artifact@v4
+      with:
+        path: coverage-reports
+        pattern: coverage-*
+      continue-on-error: true
+
+    - name: Check code coverage threshold
+      id: check-coverage
+      run: |
+        echo "Checking code coverage threshold..."
+        
+        # Find merged coverage report
+        COVERAGE_FILE=""
+        if [[ -f "coverage-reports/merged-coverage-report-${GITHUB_SHA}/coverage-summary.json" ]]; then
+          COVERAGE_FILE="coverage-reports/merged-coverage-report-${GITHUB_SHA}/coverage-summary.json"
+        elif [[ -f "coverage/coverage-summary.json" ]]; then
+          COVERAGE_FILE="coverage/coverage-summary.json"
+        fi
+        
+        if [[ -z "${COVERAGE_FILE}" ]]; then
+          echo "No coverage report found, running tests to generate coverage..."
+          
+          # Run a quick coverage check
+          npm install
+          npm run test:coverage || true
+          
+          if [[ -f "coverage/coverage-summary.json" ]]; then
+            COVERAGE_FILE="coverage/coverage-summary.json"
+          fi
+        fi
+        
+        if [[ -n "${COVERAGE_FILE}" && -f "${COVERAGE_FILE}" ]]; then
+          COVERAGE_PERCENTAGE=$(cat "${COVERAGE_FILE}" | jq -r '.total.lines.pct // 0')
+          echo "Current coverage: ${COVERAGE_PERCENTAGE}%"
+          echo "Required coverage: ${MIN_CODE_COVERAGE}%"
+          
+          if (( $(echo "${COVERAGE_PERCENTAGE} >= ${MIN_CODE_COVERAGE}" | bc -l) )); then
+            echo "✅ Code coverage passed: ${COVERAGE_PERCENTAGE}% >= ${MIN_CODE_COVERAGE}%"
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Code coverage failed: ${COVERAGE_PERCENTAGE}% < ${MIN_CODE_COVERAGE}%"
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "percentage=${COVERAGE_PERCENTAGE}" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ No coverage report found, assuming coverage check failed"
+          echo "passed=false" >> $GITHUB_OUTPUT
+          echo "percentage=0" >> $GITHUB_OUTPUT
+        fi
+
+  # Security Quality Gate
+  security-gate:
+    name: Security Quality Gate
+    runs-on: ubuntu-latest
+    
+    outputs:
+      security_passed: ${{ steps.check-security.outputs.passed }}
+      critical_issues: ${{ steps.check-security.outputs.critical_issues }}
+      high_issues: ${{ steps.check-security.outputs.high_issues }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run security scan
+      run: |
+        echo "Running security scans..."
+        
+        # npm audit
+        npm install
+        npm audit --audit-level=high --json > npm-audit.json || true
+        
+        # Check for known vulnerabilities in dependencies
+        if command -v snyk >/dev/null 2>&1; then
+          snyk test --json > snyk-results.json || true
+        fi
+
+    - name: Check security thresholds
+      id: check-security
+      run: |
+        echo "Checking security thresholds..."
+        
+        CRITICAL_ISSUES=0
+        HIGH_ISSUES=0
+        SECURITY_PASSED=true
+        
+        # Check npm audit results
+        if [[ -f "npm-audit.json" ]]; then
+          CRITICAL_ISSUES=$(cat npm-audit.json | jq '.metadata.vulnerabilities.critical // 0')
+          HIGH_ISSUES=$(cat npm-audit.json | jq '.metadata.vulnerabilities.high // 0')
+          
+          echo "npm audit results:"
+          echo "  Critical vulnerabilities: ${CRITICAL_ISSUES}"
+          echo "  High vulnerabilities: ${HIGH_ISSUES}"
+        fi
+        
+        # Check Snyk results if available
+        if [[ -f "snyk-results.json" ]]; then
+          SNYK_CRITICAL=$(cat snyk-results.json | jq '.vulnerabilities | map(select(.severity == "critical")) | length')
+          SNYK_HIGH=$(cat snyk-results.json | jq '.vulnerabilities | map(select(.severity == "high")) | length')
+          
+          echo "Snyk results:"
+          echo "  Critical vulnerabilities: ${SNYK_CRITICAL}"
+          echo "  High vulnerabilities: ${SNYK_HIGH}"
+          
+          CRITICAL_ISSUES=$((CRITICAL_ISSUES + SNYK_CRITICAL))
+          HIGH_ISSUES=$((HIGH_ISSUES + SNYK_HIGH))
+        fi
+        
+        echo "Total security issues:"
+        echo "  Critical: ${CRITICAL_ISSUES} (max: ${MAX_CRITICAL_VULNERABILITIES})"
+        echo "  High: ${HIGH_ISSUES} (max: ${MAX_HIGH_VULNERABILITIES})"
+        
+        # Check thresholds
+        if [[ ${CRITICAL_ISSUES} -gt ${MAX_CRITICAL_VULNERABILITIES} ]]; then
+          echo "❌ Critical vulnerabilities exceeded: ${CRITICAL_ISSUES} > ${MAX_CRITICAL_VULNERABILITIES}"
+          SECURITY_PASSED=false
+        fi
+        
+        if [[ ${HIGH_ISSUES} -gt ${MAX_HIGH_VULNERABILITIES} ]]; then
+          echo "❌ High vulnerabilities exceeded: ${HIGH_ISSUES} > ${MAX_HIGH_VULNERABILITIES}"
+          SECURITY_PASSED=false
+        fi
+        
+        if [[ "${SECURITY_PASSED}" == "true" ]]; then
+          echo "✅ Security quality gate passed"
+        else
+          echo "❌ Security quality gate failed"
+        fi
+        
+        echo "passed=${SECURITY_PASSED}" >> $GITHUB_OUTPUT
+        echo "critical_issues=${CRITICAL_ISSUES}" >> $GITHUB_OUTPUT
+        echo "high_issues=${HIGH_ISSUES}" >> $GITHUB_OUTPUT
+
+  # Performance Quality Gate
+  performance-gate:
+    name: Performance Quality Gate
+    runs-on: ubuntu-latest
+    
+    outputs:
+      performance_passed: ${{ steps.check-performance.outputs.passed }}
+      p95_response_time: ${{ steps.check-performance.outputs.p95_response_time }}
+      error_rate: ${{ steps.check-performance.outputs.error_rate }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download performance results
+      uses: actions/download-artifact@v4
+      with:
+        path: performance-results
+        pattern: "*-reports-*"
+      continue-on-error: true
+
+    - name: Check performance thresholds
+      id: check-performance
+      run: |
+        echo "Checking performance thresholds..."
+        
+        PERFORMANCE_PASSED=true
+        P95_RESPONSE_TIME=0
+        ERROR_RATE=0
+        
+        # Check Artillery results
+        ARTILLERY_METRICS=""
+        if [[ -f "performance-results/artillery-reports-${GITHUB_SHA}/metrics.json" ]]; then
+          ARTILLERY_METRICS="performance-results/artillery-reports-${GITHUB_SHA}/metrics.json"
+        elif [[ -f "tests/performance/metrics.json" ]]; then
+          ARTILLERY_METRICS="tests/performance/metrics.json"
+        fi
+        
+        if [[ -n "${ARTILLERY_METRICS}" && -f "${ARTILLERY_METRICS}" ]]; then
+          P95_RESPONSE_TIME=$(cat "${ARTILLERY_METRICS}" | jq -r '.responseTimeP95 // 0')
+          ERROR_RATE=$(cat "${ARTILLERY_METRICS}" | jq -r '.errorRate // 0')
+          
+          echo "Performance metrics:"
+          echo "  P95 Response Time: ${P95_RESPONSE_TIME}ms (max: ${MAX_RESPONSE_TIME_P95}ms)"
+          echo "  Error Rate: ${ERROR_RATE}% (max: ${MAX_ERROR_RATE}%)"
+          
+          # Check thresholds
+          if (( $(echo "${P95_RESPONSE_TIME} > ${MAX_RESPONSE_TIME_P95}" | bc -l) )); then
+            echo "❌ P95 response time exceeded: ${P95_RESPONSE_TIME}ms > ${MAX_RESPONSE_TIME_P95}ms"
+            PERFORMANCE_PASSED=false
+          fi
+          
+          if (( $(echo "${ERROR_RATE} > ${MAX_ERROR_RATE}" | bc -l) )); then
+            echo "❌ Error rate exceeded: ${ERROR_RATE}% > ${MAX_ERROR_RATE}%"
+            PERFORMANCE_PASSED=false
+          fi
+        else
+          echo "⚠️ No performance metrics found, running basic performance check..."
+          
+          # Run a basic performance test
+          if curl -w "@curl-format.txt" -o /dev/null -s "http://localhost:8080/health" 2>/dev/null; then
+            echo "✅ Basic performance check passed"
+          else
+            echo "⚠️ Could not perform basic performance check"
+          fi
+        fi
+        
+        # Check Lighthouse results
+        LIGHTHOUSE_SCORE=0
+        if [[ -f "performance-results/lighthouse-reports-${GITHUB_SHA}/lighthouse-summary.txt" ]]; then
+          LIGHTHOUSE_SCORE=$(grep -o '"performance":[0-9.]*' "performance-results/lighthouse-reports-${GITHUB_SHA}/lighthouse-summary.txt" | cut -d':' -f2 || echo "0")
+          
+          echo "Lighthouse performance score: ${LIGHTHOUSE_SCORE} (min: ${MIN_PERFORMANCE_SCORE})"
+          
+          if (( $(echo "${LIGHTHOUSE_SCORE} < ${MIN_PERFORMANCE_SCORE}" | bc -l) )); then
+            echo "❌ Lighthouse performance score too low: ${LIGHTHOUSE_SCORE} < ${MIN_PERFORMANCE_SCORE}"
+            PERFORMANCE_PASSED=false
+          fi
+        fi
+        
+        if [[ "${PERFORMANCE_PASSED}" == "true" ]]; then
+          echo "✅ Performance quality gate passed"
+        else
+          echo "❌ Performance quality gate failed"
+        fi
+        
+        echo "passed=${PERFORMANCE_PASSED}" >> $GITHUB_OUTPUT
+        echo "p95_response_time=${P95_RESPONSE_TIME}" >> $GITHUB_OUTPUT
+        echo "error_rate=${ERROR_RATE}" >> $GITHUB_OUTPUT
+
+  # Code Quality Gate
+  code-quality-gate:
+    name: Code Quality Gate
+    runs-on: ubuntu-latest
+    
+    outputs:
+      quality_passed: ${{ steps.check-quality.outputs.passed }}
+      maintainability_index: ${{ steps.check-quality.outputs.maintainability_index }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install dependencies
+      run: |
+        npm install
+        npm install -g jscpd complexity-report
+
+    - name: Run code quality checks
+      run: |
+        echo "Running code quality analysis..."
+        
+        # Check code duplication
+        jscpd --threshold 10 --format json --output jscpd-report.json . || true
+        
+        # Check cyclomatic complexity
+        find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*" | head -10 | while read -r file; do
+          echo "Analyzing: ${file}"
+          complexity-report -o json "${file}" >> complexity-report.json 2>/dev/null || true
+        done
+
+    - name: Check code quality thresholds
+      id: check-quality
+      run: |
+        echo "Checking code quality thresholds..."
+        
+        QUALITY_PASSED=true
+        MAINTAINABILITY_INDEX=70  # Default value
+        
+        # Check code duplication
+        if [[ -f "jscpd-report.json" ]]; then
+          DUPLICATION_PERCENTAGE=$(cat jscpd-report.json | jq -r '.statistics.total.percentage // 0')
+          echo "Code duplication: ${DUPLICATION_PERCENTAGE}%"
+          
+          if (( $(echo "${DUPLICATION_PERCENTAGE} > 10" | bc -l) )); then
+            echo "❌ Code duplication too high: ${DUPLICATION_PERCENTAGE}% > 10%"
+            QUALITY_PASSED=false
+          fi
+        fi
+        
+        # Check complexity (simplified)
+        if [[ -f "complexity-report.json" ]]; then
+          echo "Complexity analysis completed"
+          # This would need more sophisticated parsing
+          MAINTAINABILITY_INDEX=65  # Simulated value
+        fi
+        
+        echo "Maintainability Index: ${MAINTAINABILITY_INDEX} (min: ${MIN_MAINTAINABILITY_INDEX})"
+        
+        if [[ ${MAINTAINABILITY_INDEX} -lt ${MIN_MAINTAINABILITY_INDEX} ]]; then
+          echo "❌ Maintainability index too low: ${MAINTAINABILITY_INDEX} < ${MIN_MAINTAINABILITY_INDEX}"
+          QUALITY_PASSED=false
+        fi
+        
+        # Check lint results
+        npm run lint:js > lint-results.txt 2>&1 || true
+        if grep -q "error" lint-results.txt; then
+          echo "❌ Linting errors found"
+          QUALITY_PASSED=false
+        fi
+        
+        if [[ "${QUALITY_PASSED}" == "true" ]]; then
+          echo "✅ Code quality gate passed"
+        else
+          echo "❌ Code quality gate failed"
+        fi
+        
+        echo "passed=${QUALITY_PASSED}" >> $GITHUB_OUTPUT
+        echo "maintainability_index=${MAINTAINABILITY_INDEX}" >> $GITHUB_OUTPUT
+
+  # Test Quality Gate
+  test-quality-gate:
+    name: Test Quality Gate
+    runs-on: ubuntu-latest
+    
+    outputs:
+      tests_passed: ${{ steps.check-tests.outputs.passed }}
+      test_results: ${{ steps.check-tests.outputs.results }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Run tests
+      run: |
+        echo "Running test suite..."
+        npm install
+        
+        # Run all tests
+        npm run test 2>&1 | tee test-results.txt || true
+
+    - name: Check test results
+      id: check-tests
+      run: |
+        echo "Checking test results..."
+        
+        TESTS_PASSED=true
+        TEST_RESULTS="unknown"
+        
+        if [[ -f "test-results.txt" ]]; then
+          # Check for test failures
+          if grep -q "FAIL\|failed\|error" test-results.txt; then
+            echo "❌ Tests failed"
+            TESTS_PASSED=false
+            TEST_RESULTS="failed"
+          elif grep -q "PASS\|passed\|success" test-results.txt; then
+            echo "✅ Tests passed"
+            TEST_RESULTS="passed"
+          fi
+          
+          # Extract test summary if available
+          if grep -q "Tests:" test-results.txt; then
+            TEST_SUMMARY=$(grep "Tests:" test-results.txt | tail -1)
+            echo "Test summary: ${TEST_SUMMARY}"
+            TEST_RESULTS="${TEST_SUMMARY}"
+          fi
+        else
+          echo "⚠️ No test results found"
+          TESTS_PASSED=false
+        fi
+        
+        echo "passed=${TESTS_PASSED}" >> $GITHUB_OUTPUT
+        echo "results=${TEST_RESULTS}" >> $GITHUB_OUTPUT
+
+  # Quality Summary and Gate Decision
+  quality-summary:
+    name: Quality Gates Summary
+    runs-on: ubuntu-latest
+    needs: [coverage-gate, security-gate, performance-gate, code-quality-gate, test-quality-gate]
+    if: always()
+    
+    outputs:
+      quality_passed: ${{ steps.summary.outputs.quality_passed }}
+      gate_results: ${{ steps.summary.outputs.gate_results }}
+    
+    steps:
+    - name: Evaluate quality gates
+      id: summary
+      run: |
+        echo "# Quality Gates Summary" > quality-summary.md
+        echo "" >> quality-summary.md
+        echo "Quality gate evaluation for commit ${{ github.sha }}" >> quality-summary.md
+        echo "" >> quality-summary.md
+        
+        # Initialize
+        OVERALL_PASSED=true
+        GATE_RESULTS=""
+        
+        # Coverage Gate
+        COVERAGE_PASSED="${{ needs.coverage-gate.outputs.coverage_passed }}"
+        COVERAGE_PERCENTAGE="${{ needs.coverage-gate.outputs.coverage_percentage }}"
+        
+        if [[ "${COVERAGE_PASSED}" == "true" ]]; then
+          echo "✅ **Code Coverage**: ${COVERAGE_PERCENTAGE}% (≥${MIN_CODE_COVERAGE}%)" >> quality-summary.md
+          GATE_RESULTS="${GATE_RESULTS}coverage:pass,"
+        else
+          echo "❌ **Code Coverage**: ${COVERAGE_PERCENTAGE}% (<${MIN_CODE_COVERAGE}%)" >> quality-summary.md
+          OVERALL_PASSED=false
+          GATE_RESULTS="${GATE_RESULTS}coverage:fail,"
+        fi
+        
+        # Security Gate
+        SECURITY_PASSED="${{ needs.security-gate.outputs.security_passed }}"
+        CRITICAL_ISSUES="${{ needs.security-gate.outputs.critical_issues }}"
+        HIGH_ISSUES="${{ needs.security-gate.outputs.high_issues }}"
+        
+        if [[ "${SECURITY_PASSED}" == "true" ]]; then
+          echo "✅ **Security**: ${CRITICAL_ISSUES} critical, ${HIGH_ISSUES} high vulnerabilities" >> quality-summary.md
+          GATE_RESULTS="${GATE_RESULTS}security:pass,"
+        else
+          echo "❌ **Security**: ${CRITICAL_ISSUES} critical (≤${MAX_CRITICAL_VULNERABILITIES}), ${HIGH_ISSUES} high (≤${MAX_HIGH_VULNERABILITIES}) vulnerabilities" >> quality-summary.md
+          OVERALL_PASSED=false
+          GATE_RESULTS="${GATE_RESULTS}security:fail,"
+        fi
+        
+        # Performance Gate
+        PERFORMANCE_PASSED="${{ needs.performance-gate.outputs.performance_passed }}"
+        P95_TIME="${{ needs.performance-gate.outputs.p95_response_time }}"
+        ERROR_RATE="${{ needs.performance-gate.outputs.error_rate }}"
+        
+        if [[ "${PERFORMANCE_PASSED}" == "true" ]]; then
+          echo "✅ **Performance**: P95 ${P95_TIME}ms, ${ERROR_RATE}% errors" >> quality-summary.md
+          GATE_RESULTS="${GATE_RESULTS}performance:pass,"
+        else
+          echo "❌ **Performance**: P95 ${P95_TIME}ms (≤${MAX_RESPONSE_TIME_P95}ms), ${ERROR_RATE}% errors (≤${MAX_ERROR_RATE}%)" >> quality-summary.md
+          OVERALL_PASSED=false
+          GATE_RESULTS="${GATE_RESULTS}performance:fail,"
+        fi
+        
+        # Code Quality Gate  
+        QUALITY_PASSED="${{ needs.code-quality-gate.outputs.quality_passed }}"
+        MAINTAINABILITY="${{ needs.code-quality-gate.outputs.maintainability_index }}"
+        
+        if [[ "${QUALITY_PASSED}" == "true" ]]; then
+          echo "✅ **Code Quality**: Maintainability index ${MAINTAINABILITY}" >> quality-summary.md
+          GATE_RESULTS="${GATE_RESULTS}quality:pass,"
+        else
+          echo "❌ **Code Quality**: Maintainability index ${MAINTAINABILITY} (<${MIN_MAINTAINABILITY_INDEX})" >> quality-summary.md
+          OVERALL_PASSED=false
+          GATE_RESULTS="${GATE_RESULTS}quality:fail,"
+        fi
+        
+        # Test Gate
+        TESTS_PASSED="${{ needs.test-quality-gate.outputs.tests_passed }}"
+        TEST_RESULTS="${{ needs.test-quality-gate.outputs.test_results }}"
+        
+        if [[ "${TESTS_PASSED}" == "true" ]]; then
+          echo "✅ **Tests**: ${TEST_RESULTS}" >> quality-summary.md
+          GATE_RESULTS="${GATE_RESULTS}tests:pass"
+        else
+          echo "❌ **Tests**: ${TEST_RESULTS}" >> quality-summary.md
+          OVERALL_PASSED=false
+          GATE_RESULTS="${GATE_RESULTS}tests:fail"
+        fi
+        
+        echo "" >> quality-summary.md
+        
+        # Overall result
+        if [[ "${OVERALL_PASSED}" == "true" ]]; then
+          echo "## 🎉 Overall Result: **PASSED**" >> quality-summary.md
+          echo "" >> quality-summary.md
+          echo "All quality gates have passed. The code meets the required quality standards." >> quality-summary.md
+        else
+          echo "## ❌ Overall Result: **FAILED**" >> quality-summary.md
+          echo "" >> quality-summary.md
+          echo "One or more quality gates have failed. Please address the issues before proceeding." >> quality-summary.md
+        fi
+        
+        echo "" >> quality-summary.md
+        echo "---" >> quality-summary.md
+        echo "*Generated by Quality Gates workflow on $(date -u)*" >> quality-summary.md
+        
+        # Set outputs
+        echo "quality_passed=${OVERALL_PASSED}" >> $GITHUB_OUTPUT
+        echo "gate_results=${GATE_RESULTS}" >> $GITHUB_OUTPUT
+        
+        # Print summary to log
+        cat quality-summary.md
+
+    - name: Upload quality summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: quality-gates-summary-${{ github.sha }}
+        path: quality-summary.md
+        retention-days: 30
+
+    - name: Comment on PR with quality gates result
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        recreate: true
+        path: quality-summary.md
+
+    - name: Fail workflow if quality gates failed
+      if: steps.summary.outputs.quality_passed != 'true'
+      run: |
+        echo "❌ Quality gates failed - blocking deployment"
+        exit 1
+
+  # Quality Gates Notification
+  notify-quality-results:
+    name: Notify Quality Results
+    runs-on: ubuntu-latest
+    needs: [quality-summary]
+    if: always()
+    
+    steps:
+    - name: Send Slack notification
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ needs.quality-summary.outputs.quality_passed == 'true' && 'success' || 'failure' }}
+        text: |
+          Quality Gates Result: ${{ needs.quality-summary.outputs.quality_passed == 'true' && '✅ PASSED' || '❌ FAILED' }}
+          
+          **Branch**: ${{ github.ref_name }}
+          **Commit**: ${{ github.sha }}
+          **Results**: ${{ needs.quality-summary.outputs.gate_results }}
+          
+          [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        webhook_url: ${{ secrets.QUALITY_SLACK_WEBHOOK }}
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'

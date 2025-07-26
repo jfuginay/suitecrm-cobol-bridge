@@ -1,0 +1,44 @@
+# CODEOWNERS for SuiteCRM COBOL Bridge
+# These owners will be requested for review when someone opens a pull request
+
+# Global owners
+* @your-github-username @team-lead-username
+
+# API Gateway
+/api-gateway/ @backend-team @api-team-lead
+
+# COBOL Core
+/cobol-core/ @cobol-expert @legacy-team-lead
+*.cob @cobol-expert
+*.cbl @cobol-expert
+
+# SuiteCRM Integration
+/suitecrm-integration/ @php-team @crm-team-lead
+*.php @php-team
+
+# Frontend Components
+/business-rules/ @frontend-team @ui-team-lead
+/monitoring/ @frontend-team @ui-team-lead
+/debugger/src/ui/ @frontend-team
+
+# Infrastructure
+/kubernetes/ @devops-team @infrastructure-lead
+/terraform/ @devops-team @infrastructure-lead
+/docker* @devops-team
+*.yml @devops-team
+*.yaml @devops-team
+
+# CI/CD
+/.github/ @devops-team @cicd-specialist
+
+# Security
+/docker/security/ @security-team @security-lead
+*security* @security-team
+
+# Documentation
+/docs/ @documentation-team @tech-writer
+*.md @documentation-team
+
+# Database
+/migrations/ @database-team @dba-lead
+*.sql @database-team

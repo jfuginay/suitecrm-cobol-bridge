@@ -1,0 +1,442 @@
+name: Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [main, develop]
+  
+  # Manual trigger for production deployments
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: 'Version to deploy (leave empty for latest)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Determine deployment environment
+  determine-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      deploy_version: ${{ steps.env.outputs.deploy_version }}
+      should_deploy: ${{ steps.env.outputs.should_deploy }}
+    
+    steps:
+    - name: Determine deployment environment
+      id: env
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "deploy_version=${{ github.event.inputs.version || github.sha }}" >> $GITHUB_OUTPUT
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "deploy_version=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "environment=staging" >> $GITHUB_OUTPUT
+          echo "deploy_version=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+        else
+          echo "should_deploy=false" >> $GITHUB_OUTPUT
+        fi
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.should_deploy == 'true' && needs.determine-environment.outputs.environment == 'staging'
+    
+    environment:
+      name: staging
+      url: https://staging.suitecrm-cobol-bridge.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Setup EKS kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name suitecrm-cobol-bridge-staging
+
+    - name: Run database migrations
+      run: |
+        kubectl create job migration-$(date +%s) \
+          --from=cronjob/migration-job \
+          --namespace=staging || true
+        
+        # Wait for migration to complete
+        kubectl wait --for=condition=complete job/migration-$(date +%s) \
+          --timeout=300s --namespace=staging || true
+
+    - name: Update Kubernetes manifests with new image tags
+      run: |
+        cd kubernetes/overlays/staging
+        
+        # Update image tags in kustomization.yaml
+        sed -i "s|newTag:.*|newTag: ${{ needs.determine-environment.outputs.deploy_version }}|g" kustomization.yaml
+        
+        # Update additional service images
+        kubectl set image deployment/api-gateway \
+          api-gateway=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api-gateway:${{ needs.determine-environment.outputs.deploy_version }} \
+          --namespace=staging
+          
+        kubectl set image deployment/cobol-compiler \
+          cobol-compiler=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cobol-compiler:${{ needs.determine-environment.outputs.deploy_version }} \
+          --namespace=staging
+
+    - name: Deploy to staging
+      run: |
+        cd kubernetes/overlays/staging
+        kubectl apply -k . --namespace=staging
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/suitecrm --namespace=staging --timeout=600s
+        kubectl rollout status deployment/api-gateway --namespace=staging --timeout=600s
+        kubectl rollout status deployment/monitoring --namespace=staging --timeout=600s
+
+    - name: Run health checks
+      run: |
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -l app=suitecrm --namespace=staging --timeout=300s
+        kubectl wait --for=condition=ready pod -l app=api-gateway --namespace=staging --timeout=300s
+        
+        # Run application health checks
+        STAGING_URL="https://staging.suitecrm-cobol-bridge.com"
+        
+        echo "Running health checks against ${STAGING_URL}"
+        
+        # Check SuiteCRM health
+        curl -f "${STAGING_URL}/health" || exit 1
+        
+        # Check API Gateway health
+        curl -f "${STAGING_URL}/api/health" || exit 1
+        
+        # Check monitoring endpoint
+        curl -f "${STAGING_URL}/monitoring/health" || exit 1
+
+    - name: Run smoke tests
+      run: |
+        cd tests/smoke
+        npm install
+        ENVIRONMENT=staging npm run test:smoke
+
+    - name: Notify deployment success
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: '✅ Staging deployment successful!'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: success()
+
+    - name: Notify deployment failure
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: '❌ Staging deployment failed!'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: failure()
+
+  # Production Deployment with Approval
+  request-production-approval:
+    name: Request Production Approval
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-staging]
+    if: needs.determine-environment.outputs.environment == 'production' && (success() || needs.determine-environment.outputs.environment == 'production' && github.event_name == 'workflow_dispatch')
+    
+    environment:
+      name: production-approval
+    
+    steps:
+    - name: Request approval
+      run: |
+        echo "🚀 Production deployment requested"
+        echo "Version: ${{ needs.determine-environment.outputs.deploy_version }}"
+        echo "Awaiting approval from authorized personnel..."
+
+  # Blue-Green Production Deployment
+  deploy-production:
+    name: Deploy to Production (Blue-Green)
+    runs-on: ubuntu-latest
+    needs: [determine-environment, request-production-approval]
+    if: needs.determine-environment.outputs.environment == 'production'
+    
+    environment:
+      name: production
+      url: https://suitecrm-cobol-bridge.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Setup EKS kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name suitecrm-cobol-bridge-production
+
+    - name: Create deployment backup
+      run: |
+        # Create backup of current production deployment
+        kubectl get deployment suitecrm -o yaml --namespace=production > deployment-backup-$(date +%s).yaml
+        kubectl get configmap app-config -o yaml --namespace=production > configmap-backup-$(date +%s).yaml
+
+    - name: Run production database migrations
+      run: |
+        # Create a one-time migration job
+        kubectl create job migration-prod-$(date +%s) \
+          --from=cronjob/migration-job \
+          --namespace=production
+        
+        # Wait for migration to complete
+        kubectl wait --for=condition=complete job/migration-prod-$(date +%s) \
+          --timeout=600s --namespace=production
+
+    - name: Deploy to Blue environment
+      run: |
+        # Deploy to blue environment (inactive)
+        cd kubernetes/overlays/prod
+        
+        # Update blue deployment with new image
+        sed -i "s|newTag:.*|newTag: ${{ needs.determine-environment.outputs.deploy_version }}|g" kustomization-blue.yaml
+        
+        kubectl apply -k . -f kustomization-blue.yaml --namespace=production
+        
+        # Wait for blue deployment to be ready
+        kubectl rollout status deployment/suitecrm-blue --namespace=production --timeout=900s
+        kubectl rollout status deployment/api-gateway-blue --namespace=production --timeout=900s
+
+    - name: Run production health checks on Blue
+      run: |
+        # Get blue service endpoint
+        BLUE_ENDPOINT=$(kubectl get svc suitecrm-blue-service --namespace=production -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        
+        echo "Running health checks on Blue environment: ${BLUE_ENDPOINT}"
+        
+        # Health check with retries
+        for i in {1..10}; do
+          if curl -f "http://${BLUE_ENDPOINT}/health"; then
+            echo "Blue health check passed"
+            break
+          fi
+          echo "Health check attempt ${i}/10 failed, retrying in 30s..."
+          sleep 30
+        done
+
+    - name: Run comprehensive tests on Blue
+      run: |
+        cd tests/production
+        npm install
+        ENVIRONMENT=blue npm run test:comprehensive
+
+    - name: Switch traffic to Blue (Green-Blue swap)
+      run: |
+        # Update service selector to point to blue deployment
+        kubectl patch service suitecrm-service --namespace=production \
+          -p '{"spec":{"selector":{"version":"blue"}}}'
+        
+        kubectl patch service api-gateway-service --namespace=production \
+          -p '{"spec":{"selector":{"version":"blue"}}}'
+        
+        echo "Traffic switched to Blue environment"
+
+    - name: Wait and monitor Blue environment
+      run: |
+        echo "Monitoring Blue environment for 5 minutes..."
+        
+        # Monitor for 5 minutes
+        for i in {1..30}; do
+          # Check application metrics
+          HEALTH_STATUS=$(curl -s https://suitecrm-cobol-bridge.com/health | jq -r .status)
+          
+          if [[ "$HEALTH_STATUS" != "healthy" ]]; then
+            echo "Health check failed, initiating rollback..."
+            exit 1
+          fi
+          
+          echo "Health check ${i}/30 passed"
+          sleep 10
+        done
+
+    - name: Cleanup old Green environment
+      run: |
+        # Scale down old green deployment
+        kubectl scale deployment suitecrm-green --replicas=0 --namespace=production
+        kubectl scale deployment api-gateway-green --replicas=0 --namespace=production
+        
+        echo "Old Green environment scaled down"
+
+    - name: Update deployment labels
+      run: |
+        # Rename blue to green for next deployment
+        kubectl patch deployment suitecrm-blue --namespace=production \
+          -p '{"metadata":{"labels":{"version":"green"}},"spec":{"selector":{"matchLabels":{"version":"green"}},"template":{"metadata":{"labels":{"version":"green"}}}}}'
+        
+        kubectl patch deployment api-gateway-blue --namespace=production \
+          -p '{"metadata":{"labels":{"version":"green"}},"spec":{"selector":{"matchLabels":{"version":"green"}},"template":{"metadata":{"labels":{"version":"green"}}}}}'
+
+    - name: Create deployment record
+      run: |
+        # Record deployment information
+        kubectl create configmap deployment-record-$(date +%s) \
+          --from-literal=version="${{ needs.determine-environment.outputs.deploy_version }}" \
+          --from-literal=timestamp="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+          --from-literal=deployed_by="${{ github.actor }}" \
+          --from-literal=commit="${{ github.sha }}" \
+          --namespace=production
+
+    - name: Post-deployment verification
+      run: |
+        echo "Running post-deployment verification..."
+        
+        # Verify all services are running
+        kubectl get pods --namespace=production
+        
+        # Check resource usage
+        kubectl top pods --namespace=production
+        
+        # Validate configuration
+        cd tests/production
+        npm run test:configuration
+
+    - name: Notify successful deployment
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: |
+          🎉 Production deployment successful!
+          Version: ${{ needs.determine-environment.outputs.deploy_version }}
+          Deployed by: ${{ github.actor }}
+          Environment: https://suitecrm-cobol-bridge.com
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: success()
+
+    - name: Emergency rollback on failure
+      if: failure()
+      run: |
+        echo "🚨 Production deployment failed, initiating emergency rollback..."
+        
+        # Switch traffic back to green
+        kubectl patch service suitecrm-service --namespace=production \
+          -p '{"spec":{"selector":{"version":"green"}}}'
+        
+        kubectl patch service api-gateway-service --namespace=production \
+          -p '{"spec":{"selector":{"version":"green"}}}'
+        
+        # Scale up green deployment
+        kubectl scale deployment suitecrm-green --replicas=3 --namespace=production
+        kubectl scale deployment api-gateway-green --replicas=2 --namespace=production
+        
+        echo "Emergency rollback completed"
+
+    - name: Notify deployment failure
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: |
+          ❌ Production deployment failed and was rolled back!
+          Version: ${{ needs.determine-environment.outputs.deploy_version }}
+          Please check logs and investigate.
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: failure()
+
+  # Performance regression testing
+  performance-tests:
+    name: Performance Regression Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: needs.deploy-staging.result == 'success'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install Artillery
+      run: npm install -g artillery@latest
+
+    - name: Run performance tests
+      run: |
+        cd tests/performance
+        artillery run load-test-config.yml --target https://staging.suitecrm-cobol-bridge.com
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results-${{ github.sha }}
+        path: tests/performance/reports/
+        retention-days: 30
+
+  # Update release notes
+  update-release-notes:
+    name: Update Release Notes
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: needs.deploy-production.result == 'success'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate release notes
+      run: |
+        # This would typically use a tool like conventional-changelog
+        ./scripts/generate-release-notes.sh ${{ needs.determine-environment.outputs.deploy_version }}
+
+    - name: Create GitHub release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ needs.determine-environment.outputs.deploy_version }}
+        release_name: Release v${{ needs.determine-environment.outputs.deploy_version }}
+        body_path: ./RELEASE_NOTES.md
+        draft: false
+        prerelease: false

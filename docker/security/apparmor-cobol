@@ -1,0 +1,65 @@
+# AppArmor profile for COBOL runtime security
+# Restricts COBOL programs to safe operations
+
+#include <tunables/global>
+
+profile cobol-runtime flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/python>
+  
+  # Allow reading system libraries
+  /usr/lib/gnucobol/** r,
+  /usr/share/gnucobol/** r,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /lib/x86_64-linux-gnu/** mr,
+  
+  # Allow execution of compiled COBOL programs
+  /compiled/* rix,
+  
+  # Temporary file access (restricted to execution directory)
+  /tmp/cobol-exec/** rw,
+  /tmp/cobol-exec/*/input.dat rw,
+  /tmp/cobol-exec/*/output.dat rw,
+  /tmp/cobol-exec/*/monitor.log rw,
+  /tmp/cobol-exec/*/debug-trace.log rw,
+  
+  # Log access
+  /logs/** rw,
+  
+  # Network access for API (localhost only)
+  network inet stream,
+  network inet6 stream,
+  
+  # Deny access to sensitive areas
+  deny /etc/shadow r,
+  deny /etc/passwd w,
+  deny /etc/group w,
+  deny /home/** rw,
+  deny /root/** rw,
+  deny /proc/*/mem rw,
+  deny /sys/** w,
+  
+  # Allow process information reading
+  /proc/sys/kernel/random/uuid r,
+  /proc/*/stat r,
+  /proc/*/status r,
+  /proc/*/cmdline r,
+  
+  # Python execution
+  /usr/bin/python3* ix,
+  
+  # COBOL compiler (for runtime compilation)
+  /usr/bin/cobc ix,
+  
+  # Basic utilities
+  /bin/bash rix,
+  /usr/bin/env rix,
+  
+  # Capability rules
+  capability setuid,
+  capability setgid,
+  capability dac_override,
+  
+  # Signal permissions
+  signal send set=(term, kill) peer=cobol-runtime,
+}

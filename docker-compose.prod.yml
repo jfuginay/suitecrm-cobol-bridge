@@ -1,0 +1,529 @@
+version: '3.8'
+
+services:
+  # SuiteCRM with COBOL Bridge
+  suitecrm:
+    image: ${DOCKER_REGISTRY}/suitecrm-cobol-bridge:${VERSION:-latest}
+    container_name: suitecrm-cobol-bridge
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      - DATABASE_HOST=${DB_HOST}
+      - DATABASE_NAME=${DB_NAME}
+      - DATABASE_USER=${DB_USER}
+      - DATABASE_PASSWORD=${DB_PASSWORD}
+      - COBOL_API_URL=http://api-gateway:3000
+      - MONITORING_URL=http://monitoring:8081
+      - REDIS_HOST=redis-master
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES}
+    volumes:
+      - suitecrm-data:/var/www/html
+      - suitecrm-uploads:/var/www/html/upload
+      - suitecrm-cache:/var/www/html/cache
+    depends_on:
+      - api-gateway
+      - redis-master
+    networks:
+      - cobol-bridge
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # API Gateway with multiple replicas
+  api-gateway:
+    image: ${DOCKER_REGISTRY}/cobol-api-gateway:${VERSION:-latest}
+    container_name: cobol-api-gateway
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis-master
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_POOL_MIN=10
+      - DB_POOL_MAX=50
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRY=${JWT_EXPIRY:-1h}
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+      - METRICS_ENABLED=true
+      - TRACING_ENABLED=true
+      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+    volumes:
+      - ./cobol-core:/app/cobol-programs:ro
+      - api-logs:/app/logs
+    depends_on:
+      - redis-master
+      - cobol-compiler
+    networks:
+      - cobol-bridge
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # COBOL Compiler Service with security restrictions
+  cobol-compiler:
+    image: ${DOCKER_REGISTRY}/cobol-compiler:${VERSION:-latest}
+    container_name: cobol-compiler
+    restart: always
+    volumes:
+      - ./cobol-core:/cobol-programs:ro
+      - cobol-binaries:/compiled
+    networks:
+      - cobol-bridge
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+      - seccomp:./docker/security/seccomp-cobol.json
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Redis Master-Slave setup with Sentinel
+  redis-master:
+    image: redis:7-alpine
+    container_name: cobol-redis-master
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-master-data:/data
+      - ./redis/redis-master.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  redis-slave-1:
+    image: redis:7-alpine
+    container_name: cobol-redis-slave-1
+    restart: always
+    volumes:
+      - redis-slave-1-data:/data
+      - ./redis/redis-slave.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --slaveof redis-master 6379
+    depends_on:
+      - redis-master
+    networks:
+      - cobol-bridge
+
+  redis-slave-2:
+    image: redis:7-alpine
+    container_name: cobol-redis-slave-2
+    restart: always
+    volumes:
+      - redis-slave-2-data:/data
+      - ./redis/redis-slave.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --slaveof redis-master 6379
+    depends_on:
+      - redis-master
+    networks:
+      - cobol-bridge
+
+  # Redis Sentinels for high availability
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: cobol-redis-sentinel-1
+    restart: always
+    volumes:
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    networks:
+      - cobol-bridge
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: cobol-redis-sentinel-2
+    restart: always
+    volumes:
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    networks:
+      - cobol-bridge
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: cobol-redis-sentinel-3
+    restart: always
+    volumes:
+      - ./redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    networks:
+      - cobol-bridge
+
+  # Real-time Monitoring Dashboard
+  monitoring:
+    image: ${DOCKER_REGISTRY}/cobol-monitoring:${VERSION:-latest}
+    container_name: cobol-monitoring
+    restart: always
+    ports:
+      - "8081:80"
+    environment:
+      - REACT_APP_API_URL=${API_URL:-http://api-gateway:3000}
+      - REACT_APP_WS_URL=${WS_URL:-ws://api-gateway:3000}
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Business Rules Editor
+  rules-editor:
+    image: ${DOCKER_REGISTRY}/cobol-rules-editor:${VERSION:-latest}
+    container_name: cobol-rules-editor
+    restart: always
+    ports:
+      - "8082:80"
+    environment:
+      - REACT_APP_API_URL=${API_URL:-http://api-gateway:3000}
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Mobile API Service
+  mobile-api:
+    image: ${DOCKER_REGISTRY}/cobol-mobile-api:${VERSION:-latest}
+    container_name: cobol-mobile-api
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - COBOL_API_URL=http://api-gateway:3000
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_POOL_MIN=5
+      - DB_POOL_MAX=20
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # Time-Travel Debugger
+  debugger:
+    image: ${DOCKER_REGISTRY}/cobol-debugger:${VERSION:-latest}
+    container_name: cobol-debugger
+    restart: always
+    ports:
+      - "3005:3005"
+      - "8083:80"
+    environment:
+      - NODE_ENV=production
+      - API_URL=http://api-gateway:3000
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+    volumes:
+      - debugger-traces:/app/traces
+    depends_on:
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # Cloud Burst Scheduler
+  cloud-burst:
+    image: ${DOCKER_REGISTRY}/cobol-cloud-burst:${VERSION:-latest}
+    container_name: cobol-cloud-burst
+    restart: always
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis-master
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      - MAINFRAME_HOST=${MAINFRAME_HOST}
+      - MAINFRAME_USER=${MAINFRAME_USER}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AZURE_REGION=${AZURE_REGION:-eastus}
+      - GCP_REGION=${GCP_REGION:-us-central1}
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+    volumes:
+      - ./cloud-burst/config:/app/config:ro
+    depends_on:
+      - redis-master
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cobol-prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-prod.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cobol-grafana
+    restart: always
+    ports:
+      - "3006:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SERVER_ROOT_URL=${GRAFANA_URL}
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=${SMTP_HOST}
+      - GF_SMTP_USER=${SMTP_USER}
+      - GF_SMTP_PASSWORD=${SMTP_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Nginx Reverse Proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: cobol-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - nginx-cache:/var/cache/nginx
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      - suitecrm
+      - monitoring
+      - rules-editor
+      - api-gateway
+    networks:
+      - cobol-bridge
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # Elasticsearch for logging
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: cobol-elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # Kibana for log visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: cobol-kibana
+    restart: always
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - cobol-bridge
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # Filebeat for log shipping
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    container_name: cobol-filebeat
+    restart: always
+    user: root
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - api-logs:/logs/api:ro
+      - nginx-logs:/logs/nginx:ro
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+    depends_on:
+      - elasticsearch
+    networks:
+      - cobol-bridge
+
+  # Backup service
+  backup:
+    image: ${DOCKER_REGISTRY}/cobol-backup:${VERSION:-latest}
+    container_name: cobol-backup
+    restart: always
+    environment:
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
+      - S3_BUCKET=${BACKUP_S3_BUCKET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY}
+    volumes:
+      - suitecrm-data:/data/suitecrm:ro
+      - mysql-data:/data/mysql:ro
+      - redis-master-data:/data/redis:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - cobol-bridge
+
+volumes:
+  suitecrm-data:
+    driver: local
+  suitecrm-uploads:
+    driver: local
+  suitecrm-cache:
+    driver: local
+  mysql-data:
+    driver: local
+  redis-master-data:
+    driver: local
+  redis-slave-1-data:
+    driver: local
+  redis-slave-2-data:
+    driver: local
+  cobol-binaries:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  api-logs:
+    driver: local
+  nginx-cache:
+    driver: local
+  nginx-logs:
+    driver: local
+  elasticsearch-data:
+    driver: local
+  debugger-traces:
+    driver: local
+
+networks:
+  cobol-bridge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

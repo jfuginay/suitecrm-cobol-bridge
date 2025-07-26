@@ -1,0 +1,588 @@
+name: Semantic Versioning & Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+          - prerelease
+      prerelease_identifier:
+        description: 'Prerelease identifier (alpha, beta, rc)'
+        required: false
+        default: 'beta'
+        type: string
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  # Analyze commit messages for semantic versioning
+  analyze-commits:
+    name: Analyze Commits for Version Bump
+    runs-on: ubuntu-latest
+    
+    outputs:
+      should_release: ${{ steps.analysis.outputs.should_release }}
+      release_type: ${{ steps.analysis.outputs.release_type }}
+      new_version: ${{ steps.analysis.outputs.new_version }}
+      release_notes: ${{ steps.analysis.outputs.release_notes }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Install semantic-release dependencies
+      run: |
+        npm install -g @semantic-release/changelog @semantic-release/git @semantic-release/github conventional-changelog-conventionalcommits
+
+    - name: Get current version
+      id: current-version
+      run: |
+        CURRENT_VERSION=$(cat package.json | jq -r .version)
+        echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+        echo "Current version: ${CURRENT_VERSION}"
+
+    - name: Analyze commits since last release
+      id: analysis
+      run: |
+        # Get the last release tag
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Last release tag: ${LAST_TAG}"
+        
+        # Get commits since last release
+        if [[ "${LAST_TAG}" == "v0.0.0" ]]; then
+          COMMITS=$(git log --pretty=format:"%s" --no-merges)
+        else
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s" --no-merges)
+        fi
+        
+        echo "Commits to analyze:"
+        echo "${COMMITS}"
+        
+        # Analyze commit messages for conventional commits
+        BREAKING_CHANGES=false
+        FEATURES=false
+        FIXES=false
+        SHOULD_RELEASE=false
+        
+        while IFS= read -r commit; do
+          echo "Analyzing commit: ${commit}"
+          
+          # Check for breaking changes
+          if [[ "${commit}" =~ ^[a-zA-Z]+(\(.+\))?!: ]] || echo "${commit}" | grep -q "BREAKING CHANGE"; then
+            BREAKING_CHANGES=true
+            SHOULD_RELEASE=true
+            echo "  -> Breaking change detected"
+          # Check for features
+          elif [[ "${commit}" =~ ^feat(\(.+\))?: ]]; then
+            FEATURES=true
+            SHOULD_RELEASE=true
+            echo "  -> Feature detected"
+          # Check for fixes
+          elif [[ "${commit}" =~ ^fix(\(.+\))?: ]]; then
+            FIXES=true
+            SHOULD_RELEASE=true
+            echo "  -> Fix detected"
+          # Check for other release-worthy commits
+          elif [[ "${commit}" =~ ^(perf|refactor)(\(.+\))?: ]]; then
+            FIXES=true  # Treat as patch-level changes
+            SHOULD_RELEASE=true
+            echo "  -> Performance/refactor change detected"
+          fi
+        done <<< "${COMMITS}"
+        
+        # Determine release type
+        RELEASE_TYPE="none"
+        if [[ "${{ github.event.inputs.release_type }}" != "auto" && "${{ github.event.inputs.release_type }}" != "" ]]; then
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+          SHOULD_RELEASE=true
+          echo "Manual release type specified: ${RELEASE_TYPE}"
+        elif [[ "${BREAKING_CHANGES}" == "true" ]]; then
+          RELEASE_TYPE="major"
+        elif [[ "${FEATURES}" == "true" ]]; then
+          RELEASE_TYPE="minor"
+        elif [[ "${FIXES}" == "true" ]]; then
+          RELEASE_TYPE="patch"
+        fi
+        
+        echo "Analysis results:"
+        echo "  Breaking changes: ${BREAKING_CHANGES}"
+        echo "  Features: ${FEATURES}"
+        echo "  Fixes: ${FIXES}"
+        echo "  Should release: ${SHOULD_RELEASE}"
+        echo "  Release type: ${RELEASE_TYPE}"
+        
+        # Calculate new version
+        CURRENT_VERSION="${{ steps.current-version.outputs.current_version }}"
+        NEW_VERSION=""
+        
+        if [[ "${SHOULD_RELEASE}" == "true" && "${RELEASE_TYPE}" != "none" ]]; then
+          # Parse current version
+          IFS='.' read -ra VERSION_PARTS <<< "${CURRENT_VERSION}"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]%%-*}  # Remove any prerelease suffix
+          
+          case "${RELEASE_TYPE}" in
+            major)
+              NEW_VERSION="$((MAJOR + 1)).0.0"
+              ;;
+            minor)
+              NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+              ;;
+            patch)
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+              ;;
+            prerelease)
+              PRERELEASE_ID="${{ github.event.inputs.prerelease_identifier || 'beta' }}"
+              # Find existing prerelease number or start with 1
+              if [[ "${CURRENT_VERSION}" =~ -${PRERELEASE_ID}\.([0-9]+)$ ]]; then
+                PRERELEASE_NUM=$((${BASH_REMATCH[1]} + 1))
+              else
+                PRERELEASE_NUM=1
+              fi
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))-${PRERELEASE_ID}.${PRERELEASE_NUM}"
+              ;;
+          esac
+          
+          echo "New version: ${NEW_VERSION}"
+        fi
+        
+        # Generate release notes
+        RELEASE_NOTES=""
+        if [[ "${SHOULD_RELEASE}" == "true" ]]; then
+          cat > /tmp/release_notes.md << 'EOF'
+        ## 🚀 What's Changed
+        
+        EOF
+          
+          # Add breaking changes
+          if [[ "${BREAKING_CHANGES}" == "true" ]]; then
+            echo "### 💥 BREAKING CHANGES" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+            while IFS= read -r commit; do
+              if [[ "${commit}" =~ ^[a-zA-Z]+(\(.+\))?!: ]] || echo "${commit}" | grep -q "BREAKING CHANGE"; then
+                echo "- ${commit}" >> /tmp/release_notes.md
+              fi
+            done <<< "${COMMITS}"
+            echo "" >> /tmp/release_notes.md
+          fi
+          
+          # Add features
+          if [[ "${FEATURES}" == "true" ]]; then
+            echo "### ✨ New Features" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+            while IFS= read -r commit; do
+              if [[ "${commit}" =~ ^feat(\(.+\))?: ]]; then
+                echo "- ${commit#feat*: }" >> /tmp/release_notes.md
+              fi
+            done <<< "${COMMITS}"
+            echo "" >> /tmp/release_notes.md
+          fi
+          
+          # Add fixes
+          if [[ "${FIXES}" == "true" ]]; then
+            echo "### 🐛 Bug Fixes" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+            while IFS= read -r commit; do
+              if [[ "${commit}" =~ ^fix(\(.+\))?: ]]; then
+                echo "- ${commit#fix*: }" >> /tmp/release_notes.md
+              elif [[ "${commit}" =~ ^(perf|refactor)(\(.+\))?: ]]; then
+                echo "- ${commit}" >> /tmp/release_notes.md
+              fi
+            done <<< "${COMMITS}"
+            echo "" >> /tmp/release_notes.md
+          fi
+          
+          # Add metadata
+          echo "### 📊 Release Information" >> /tmp/release_notes.md
+          echo "" >> /tmp/release_notes.md
+          echo "- **Version**: ${NEW_VERSION}" >> /tmp/release_notes.md
+          echo "- **Release Type**: ${RELEASE_TYPE}" >> /tmp/release_notes.md
+          echo "- **Build**: [${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})" >> /tmp/release_notes.md
+          echo "- **Commit**: [\`${GITHUB_SHA:0:7}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})" >> /tmp/release_notes.md
+          echo "- **Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> /tmp/release_notes.md
+          
+          RELEASE_NOTES=$(cat /tmp/release_notes.md)
+        fi
+        
+        # Set outputs
+        echo "should_release=${SHOULD_RELEASE}" >> $GITHUB_OUTPUT
+        echo "release_type=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
+        echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+        
+        # Save release notes to file for next step
+        if [[ -n "${RELEASE_NOTES}" ]]; then
+          echo "${RELEASE_NOTES}" > /tmp/release_notes_output.md
+          echo "release_notes_file=/tmp/release_notes_output.md" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload release notes
+      if: steps.analysis.outputs.should_release == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-notes-${{ github.sha }}
+        path: /tmp/release_notes_output.md
+        retention-days: 7
+
+  # Update version and create release
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: analyze-commits
+    if: needs.analyze-commits.outputs.should_release == 'true'
+    
+    outputs:
+      release_tag: ${{ steps.create-tag.outputs.release_tag }}
+      release_id: ${{ steps.create-release.outputs.release_id }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Configure Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+
+    - name: Update package.json version
+      id: update-version
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        echo "Updating version to: ${NEW_VERSION}"
+        
+        # Update package.json
+        jq ".version = \"${NEW_VERSION}\"" package.json > package.json.tmp
+        mv package.json.tmp package.json
+        
+        # Update other version files if they exist
+        if [[ -f "VERSION" ]]; then
+          echo "${NEW_VERSION}" > VERSION
+        fi
+        
+        # Update version in other package.json files
+        find . -name "package.json" -not -path "./node_modules/*" -not -path "./.git/*" | while read -r file; do
+          if [[ "${file}" != "./package.json" ]]; then
+            echo "Updating version in ${file}"
+            jq ".version = \"${NEW_VERSION}\"" "${file}" > "${file}.tmp"
+            mv "${file}.tmp" "${file}"
+          fi
+        done
+        
+        echo "updated_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Update CHANGELOG.md
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        RELEASE_DATE=$(date +'%Y-%m-%d')
+        
+        # Download release notes
+        mkdir -p /tmp/artifacts
+        
+        # Create new changelog entry
+        cat > /tmp/changelog_entry.md << EOF
+        ## [${NEW_VERSION}] - ${RELEASE_DATE}
+        
+        EOF
+        
+        # Add the release notes content (without the header)
+        if [[ -f "/tmp/release_notes_output.md" ]]; then
+          tail -n +3 "/tmp/release_notes_output.md" >> /tmp/changelog_entry.md
+        fi
+        
+        echo "" >> /tmp/changelog_entry.md
+        
+        # Prepend to existing CHANGELOG.md
+        if [[ -f "CHANGELOG.md" ]]; then
+          cat /tmp/changelog_entry.md CHANGELOG.md > /tmp/new_changelog.md
+          mv /tmp/new_changelog.md CHANGELOG.md
+        else
+          cat > CHANGELOG.md << EOF
+        # Changelog
+        
+        All notable changes to this project will be documented in this file.
+        
+        The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+        and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+        
+        EOF
+          cat /tmp/changelog_entry.md >> CHANGELOG.md
+        fi
+
+    - name: Download release notes
+      uses: actions/download-artifact@v4
+      with:
+        name: release-notes-${{ github.sha }}
+        path: /tmp/
+
+    - name: Commit version bump
+      run: |
+        git add package.json CHANGELOG.md VERSION || true
+        
+        # Add other package.json files
+        find . -name "package.json" -not -path "./node_modules/*" -not -path "./.git/*" | xargs git add
+        
+        git commit -m "chore(release): bump version to ${{ needs.analyze-commits.outputs.new_version }}"
+
+    - name: Create and push tag
+      id: create-tag
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        RELEASE_TAG="v${NEW_VERSION}"
+        
+        echo "Creating tag: ${RELEASE_TAG}"
+        git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_TAG}"
+        git push origin "${RELEASE_TAG}"
+        git push origin main
+        
+        echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      id: create-release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.create-tag.outputs.release_tag }}
+        release_name: Release ${{ steps.create-tag.outputs.release_tag }}
+        body_path: /tmp/release_notes_output.md
+        draft: false
+        prerelease: ${{ contains(needs.analyze-commits.outputs.new_version, '-') }}
+
+    - name: Update release with artifacts
+      run: |
+        echo "Release created with ID: ${{ steps.create-release.outputs.id }}"
+        echo "Release URL: ${{ steps.create-release.outputs.html_url }}"
+
+  # Build and attach release artifacts
+  build-release-artifacts:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [analyze-commits, create-release]
+    if: needs.analyze-commits.outputs.should_release == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.create-release.outputs.release_tag }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Install dependencies and build
+      run: |
+        npm run deps:install
+        npm run build
+
+    - name: Create source archive
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        ARCHIVE_NAME="suitecrm-cobol-bridge-${NEW_VERSION}"
+        
+        # Create clean source archive
+        git archive --format=tar.gz --prefix="${ARCHIVE_NAME}/" HEAD > "${ARCHIVE_NAME}-source.tar.gz"
+        
+        # Create checksums
+        sha256sum "${ARCHIVE_NAME}-source.tar.gz" > "${ARCHIVE_NAME}-source.tar.gz.sha256"
+
+    - name: Create binary archive
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        ARCHIVE_NAME="suitecrm-cobol-bridge-${NEW_VERSION}"
+        
+        # Create deployment package
+        mkdir -p "${ARCHIVE_NAME}"
+        
+        # Copy built artifacts
+        cp -r api-gateway/dist "${ARCHIVE_NAME}/api-gateway-dist" 2>/dev/null || true
+        cp -r business-rules/build "${ARCHIVE_NAME}/business-rules-build" 2>/dev/null || true
+        cp -r monitoring/build "${ARCHIVE_NAME}/monitoring-build" 2>/dev/null || true
+        
+        # Copy configuration and deployment files
+        cp -r kubernetes "${ARCHIVE_NAME}/"
+        cp -r scripts "${ARCHIVE_NAME}/"
+        cp docker-compose*.yml "${ARCHIVE_NAME}/"
+        cp package.json "${ARCHIVE_NAME}/"
+        cp CHANGELOG.md "${ARCHIVE_NAME}/"
+        cp README.md "${ARCHIVE_NAME}/"
+        cp LICENSE "${ARCHIVE_NAME}/"
+        
+        # Create binary archive
+        tar -czf "${ARCHIVE_NAME}-binary.tar.gz" "${ARCHIVE_NAME}"
+        
+        # Create checksums
+        sha256sum "${ARCHIVE_NAME}-binary.tar.gz" > "${ARCHIVE_NAME}-binary.tar.gz.sha256"
+
+    - name: Generate release manifest
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        RELEASE_TAG="${{ needs.create-release.outputs.release_tag }}"
+        
+        cat > release-manifest.json << EOF
+        {
+          "version": "${NEW_VERSION}",
+          "tag": "${RELEASE_TAG}",
+          "release_date": "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)",
+          "commit": "${GITHUB_SHA}",
+          "build": "${GITHUB_RUN_NUMBER}",
+          "artifacts": {
+            "source": "suitecrm-cobol-bridge-${NEW_VERSION}-source.tar.gz",
+            "binary": "suitecrm-cobol-bridge-${NEW_VERSION}-binary.tar.gz",
+            "docker_images": [
+              "ghcr.io/${GITHUB_REPOSITORY,,}-suitecrm:${NEW_VERSION}",
+              "ghcr.io/${GITHUB_REPOSITORY,,}-api-gateway:${NEW_VERSION}",
+              "ghcr.io/${GITHUB_REPOSITORY,,}-cobol-compiler:${NEW_VERSION}"
+            ]
+          },
+          "checksums": {
+            "source": "$(cat suitecrm-cobol-bridge-${NEW_VERSION}-source.tar.gz.sha256 | cut -d' ' -f1)",
+            "binary": "$(cat suitecrm-cobol-bridge-${NEW_VERSION}-binary.tar.gz.sha256 | cut -d' ' -f1)"
+          }
+        }
+        EOF
+
+    - name: Upload release assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-source.tar.gz
+        asset_name: suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-source.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload binary release assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-binary.tar.gz
+        asset_name: suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-binary.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload release manifest
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./release-manifest.json
+        asset_name: release-manifest.json
+        asset_content_type: application/json
+
+    - name: Upload checksums
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-source.tar.gz.sha256
+        asset_name: suitecrm-cobol-bridge-${{ needs.analyze-commits.outputs.new_version }}-source.tar.gz.sha256
+        asset_content_type: text/plain
+
+  # Trigger deployment pipeline
+  trigger-deployment:
+    name: Trigger Deployment
+    runs-on: ubuntu-latest
+    needs: [analyze-commits, create-release, build-release-artifacts]
+    if: needs.analyze-commits.outputs.should_release == 'true' && !contains(needs.analyze-commits.outputs.new_version, '-')
+    
+    steps:
+    - name: Trigger staging deployment
+      uses: peter-evans/repository-dispatch@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        event-type: deploy-staging
+        client-payload: |
+          {
+            "version": "${{ needs.analyze-commits.outputs.new_version }}",
+            "tag": "${{ needs.create-release.outputs.release_tag }}",
+            "release_id": "${{ needs.create-release.outputs.release_id }}"
+          }
+
+    - name: Notify teams
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: |
+          🎉 New release created!
+          
+          **Version**: ${{ needs.analyze-commits.outputs.new_version }}
+          **Type**: ${{ needs.analyze-commits.outputs.release_type }}
+          **Tag**: ${{ needs.create-release.outputs.release_tag }}
+          
+          📦 [Download Release](https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.release_tag }})
+          🚀 Staging deployment triggered
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: success()
+
+  # Update documentation
+  update-docs:
+    name: Update Release Documentation
+    runs-on: ubuntu-latest
+    needs: [analyze-commits, create-release]
+    if: needs.analyze-commits.outputs.should_release == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        ref: main
+
+    - name: Update version in documentation
+      run: |
+        NEW_VERSION="${{ needs.analyze-commits.outputs.new_version }}"
+        
+        # Update version in README.md badges
+        if [[ -f "README.md" ]]; then
+          sed -i "s/version-[0-9]\+\.[0-9]\+\.[0-9]\+/version-${NEW_VERSION}/g" README.md
+          sed -i "s/v[0-9]\+\.[0-9]\+\.[0-9]\+/v${NEW_VERSION}/g" README.md
+        fi
+        
+        # Update version in other documentation files
+        find docs/ -name "*.md" -type f 2>/dev/null | while read -r file; do
+          sed -i "s/version [0-9]\+\.[0-9]\+\.[0-9]\+/version ${NEW_VERSION}/g" "${file}"
+        done || true
+
+    - name: Commit documentation updates
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        if git diff --quiet; then
+          echo "No documentation changes to commit"
+        else
+          git add .
+          git commit -m "docs: update version references to ${{ needs.analyze-commits.outputs.new_version }}"
+          git push origin main
+        fi

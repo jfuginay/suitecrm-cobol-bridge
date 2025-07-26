@@ -1,0 +1,326 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring
+  namespace: suitecrm-cobol
+  labels:
+    app: monitoring
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
+  selector:
+    app: monitoring
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring
+  namespace: suitecrm-cobol
+  labels:
+    app: monitoring
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: monitoring
+  template:
+    metadata:
+      labels:
+        app: monitoring
+    spec:
+      containers:
+      - name: monitoring
+        image: ${DOCKER_REGISTRY}/cobol-monitoring:${VERSION}
+        ports:
+        - containerPort: 80
+          name: http
+        env:
+        - name: REACT_APP_API_URL
+          value: "http://api-gateway:3000"
+        - name: REACT_APP_WS_URL
+          value: "ws://api-gateway:3000"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "0.1"
+          limits:
+            memory: "512Mi"
+            cpu: "0.5"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 101
+          runAsGroup: 101
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: suitecrm-cobol
+  labels:
+    app: prometheus
+spec:
+  ports:
+    - port: 9090
+      targetPort: 9090
+      protocol: TCP
+      name: http
+  selector:
+    app: prometheus
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus
+  namespace: suitecrm-cobol
+  labels:
+    app: prometheus
+spec:
+  serviceName: prometheus
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        args:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus'
+          - '--storage.tsdb.retention.time=30d'
+          - '--web.enable-lifecycle'
+          - '--web.enable-admin-api'
+        ports:
+        - containerPort: 9090
+          name: http
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+        - name: prometheus-rules
+          mountPath: /etc/prometheus/rules
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "0.5"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          fsGroup: 65534
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-rules
+        configMap:
+          name: prometheus-rules
+  volumeClaimTemplates:
+  - metadata:
+      name: prometheus-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "fast-ssd"
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: suitecrm-cobol
+  labels:
+    app: grafana
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: grafana
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: suitecrm-cobol
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: grafana-secret
+              key: GRAFANA_PASSWORD
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        - name: GF_INSTALL_PLUGINS
+          value: "grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel"
+        - name: GF_SMTP_ENABLED
+          value: "true"
+        - name: GF_SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: smtp-secret
+              key: SMTP_HOST
+        - name: GF_SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: smtp-secret
+              key: SMTP_USER
+        - name: GF_SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: smtp-secret
+              key: SMTP_PASSWORD
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+        - name: grafana-dashboards
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: grafana-datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "0.25"
+          limits:
+            memory: "512Mi"
+            cpu: "0.5"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 472
+          runAsGroup: 472
+          fsGroup: 472
+      volumes:
+      - name: grafana-data
+        persistentVolumeClaim:
+          claimName: grafana-data-pvc
+      - name: grafana-dashboards
+        configMap:
+          name: grafana-dashboards
+      - name: grafana-datasources
+        configMap:
+          name: grafana-datasources
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data-pvc
+  namespace: suitecrm-cobol
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: "fast-ssd"
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: suitecrm-cobol
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: suitecrm-cobol

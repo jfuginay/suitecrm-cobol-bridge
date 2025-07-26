@@ -1,0 +1,228 @@
+groups:
+  - name: suitecrm_cobol_alerts
+    interval: 30s
+    rules:
+      # Application Alerts
+      - alert: SuiteCRMDown
+        expr: up{job="suitecrm"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: suitecrm
+        annotations:
+          summary: "SuiteCRM instance is down"
+          description: "SuiteCRM instance {{ $labels.instance }} has been down for more than 5 minutes."
+          
+      - alert: APIGatewayDown
+        expr: up{job="api-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api-gateway
+        annotations:
+          summary: "API Gateway instance is down"
+          description: "API Gateway instance {{ $labels.instance }} has been down for more than 2 minutes."
+          
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5% for {{ $labels.instance }} (current: {{ $value | humanizePercentage }})"
+          
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is above 2s for {{ $labels.instance }} (current: {{ $value }}s)"
+          
+      # COBOL Specific Alerts
+      - alert: COBOLCompilationFailure
+        expr: increase(cobol_compilation_failures_total[1h]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: cobol
+        annotations:
+          summary: "High COBOL compilation failure rate"
+          description: "More than 5 COBOL compilation failures in the last hour on {{ $labels.instance }}"
+          
+      - alert: COBOLExecutionTimeout
+        expr: rate(cobol_execution_timeouts_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: cobol
+        annotations:
+          summary: "High COBOL execution timeout rate"
+          description: "COBOL execution timeout rate is above 10% on {{ $labels.instance }}"
+          
+      - alert: COBOLMemoryExhaustion
+        expr: cobol_memory_usage_bytes / cobol_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: cobol
+        annotations:
+          summary: "COBOL process memory exhaustion"
+          description: "COBOL process on {{ $labels.instance }} is using more than 90% of allocated memory"
+          
+      # Database Alerts
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: mysql
+        annotations:
+          summary: "MySQL is down"
+          description: "MySQL instance {{ $labels.instance }} has been down for more than 2 minutes."
+          
+      - alert: MySQLSlowQueries
+        expr: rate(mysql_slow_queries[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: mysql
+        annotations:
+          summary: "High rate of MySQL slow queries"
+          description: "MySQL instance {{ $labels.instance }} has a high rate of slow queries ({{ $value | humanizePercentage }})"
+          
+      - alert: MySQLConnectionsExhausted
+        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: mysql
+        annotations:
+          summary: "MySQL connections near limit"
+          description: "MySQL instance {{ $labels.instance }} is using more than 80% of max connections"
+          
+      # Redis Alerts
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance {{ $labels.instance }} has been down for more than 2 minutes."
+          
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis instance {{ $labels.instance }} is using more than 90% of allocated memory"
+          
+      - alert: RedisMasterLinkDown
+        expr: redis_master_link_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis replication link is down"
+          description: "Redis slave {{ $labels.instance }} has lost connection to master"
+          
+      # Infrastructure Alerts
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node is down"
+          description: "Node {{ $labels.instance }} has been down for more than 5 minutes."
+          
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 85% on {{ $labels.instance }} (current: {{ $value }}%)"
+          
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 90% on {{ $labels.instance }} (current: {{ $value }}%)"
+          
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining on {{ $labels.instance }} ({{ $value }}% free)"
+          
+      # Kubernetes Alerts
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod is crash looping"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+          
+      - alert: PodNotReady
+        expr: kube_pod_status_ready{condition="false"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod is not ready"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been not ready for more than 10 minutes"
+          
+      - alert: DeploymentReplicasNotMatched
+        expr: kube_deployment_spec_replicas != kube_deployment_status_replicas_available
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deployment replicas mismatch"
+          description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has {{ $value }} replicas available, expected {{ $labels.spec_replicas }}"
+          
+      - alert: PersistentVolumeSpaceLow
+        expr: (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PersistentVolume space is low"
+          description: "PersistentVolume {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} has less than 10% space available"
+          
+      # Certificate Alerts
+      - alert: SSLCertificateExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL certificate expiring soon"
+          description: "SSL certificate for {{ $labels.instance }} will expire in less than 7 days"
+          
+      - alert: SSLCertificateExpired
+        expr: probe_ssl_earliest_cert_expiry - time() < 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSL certificate has expired"
+          description: "SSL certificate for {{ $labels.instance }} has expired"

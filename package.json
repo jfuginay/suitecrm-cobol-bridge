@@ -1,0 +1,149 @@
+{
+  "name": "suitecrm-cobol-bridge",
+  "version": "1.0.0",
+  "description": "SuiteCRM COBOL Bridge - Comprehensive Test Suite",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:integration && npm run test:security",
+    "test:unit": "npm run test:unit:api && npm run test:unit:react && npm run test:unit:php && npm run test:unit:cloud",
+    "test:unit:api": "cd api-gateway && npm test",
+    "test:unit:react": "cd business-rules && npm test -- --watchAll=false && cd ../monitoring && npm test -- --watchAll=false",
+    "test:unit:php": "cd suitecrm-integration && vendor/bin/phpunit",
+    "test:unit:cloud": "cd cloud-burst && npm test",
+    "test:integration": "cd tests/integration && npx playwright test",
+    "test:security": "cd tests/security && node security-tests.js",
+    "test:cobol": "cd cobol-core/tests && node validate-cobol.js",
+    "test:performance": "cd tests/performance && artillery run load-test-config.yml",
+    "test:e2e": "npm run test:integration",
+    "test:watch": "npm run test:unit:api -- --watch",
+    "test:coverage": "npm run test:unit && npm run coverage:merge",
+    "coverage:merge": "nyc merge coverage coverage/merged.json && nyc report --reporter=html --reporter=text",
+    "lint": "npm run lint:js && npm run lint:php",
+    "lint:js": "eslint api-gateway business-rules cloud-burst monitoring tests --ext .js,.jsx",
+    "lint:php": "cd suitecrm-integration && vendor/bin/phpcs --standard=PSR12 custom/ modules/",
+    "format": "npm run format:js && npm run format:php",
+    "format:js": "prettier --write \"**/*.{js,jsx,json,md}\"",
+    "format:php": "cd suitecrm-integration && vendor/bin/phpcbf --standard=PSR12 custom/ modules/",
+    "build": "npm run build:api && npm run build:react",
+    "build:api": "cd api-gateway && npm run build",
+    "build:react": "cd business-rules && npm run build && cd ../monitoring && npm run build",
+    "build:cobol": "cd cobol-core && bash compile-all.sh",
+    "start": "docker-compose up -d",
+    "start:dev": "docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    "start:test": "docker-compose -f docker-compose.test.yml up -d",
+    "stop": "docker-compose down",
+    "clean": "npm run clean:deps && npm run clean:build && npm run clean:test",
+    "clean:deps": "rm -rf node_modules api-gateway/node_modules business-rules/node_modules cloud-burst/node_modules monitoring/node_modules",
+    "clean:build": "rm -rf api-gateway/dist business-rules/build monitoring/build",
+    "clean:test": "rm -rf coverage test-results cobol-core/tests/output",
+    "deps:install": "npm install && cd api-gateway && npm install && cd ../business-rules && npm install && cd ../cloud-burst && npm install && cd ../monitoring && npm install && cd ../suitecrm-integration && composer install",
+    "deps:update": "npm update && cd api-gateway && npm update && cd ../business-rules && npm update && cd ../cloud-burst && npm update && cd ../monitoring && npm update && cd ../suitecrm-integration && composer update",
+    "setup": "npm run deps:install && npm run build:cobol && npm run migrate",
+    "migrate": "cd migrations && bash migrate.sh",
+    "seed": "cd tests/fixtures && node seed-test-data.js",
+    "docs": "npm run docs:api && npm run docs:php",
+    "docs:api": "cd api-gateway && npm run docs",
+    "docs:php": "cd suitecrm-integration && vendor/bin/phpunit --generate-documentation",
+    "security:scan": "npm audit && cd suitecrm-integration && composer audit",
+    "health:check": "npm run health:api && npm run health:cobol",
+    "health:api": "curl -f http://localhost:3000/health || exit 1",
+    "health:cobol": "cd cobol-core/tests && node validate-cobol.js --quick",
+    "release": "npm run test && npm run build && npm run security:scan",
+    "ci": "npm run setup && npm run test:coverage && npm run security:scan"
+  },
+  "keywords": [
+    "suitecrm",
+    "cobol",
+    "bridge",
+    "integration",
+    "testing",
+    "financial",
+    "enterprise"
+  ],
+  "author": "SuiteCRM COBOL Bridge Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/suitecrm-cobol-bridge.git"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "artillery": "^2.0.0",
+    "codecov": "^3.8.3",
+    "eslint": "^8.50.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-import": "^2.29.0",
+    "eslint-plugin-jest": "^27.4.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "husky": "^8.0.3",
+    "jest": "^29.7.0",
+    "lint-staged": "^15.0.0",
+    "nyc": "^15.1.0",
+    "prettier": "^3.0.0",
+    "supertest": "^6.3.3"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.16.0"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged",
+      "pre-push": "npm run test:unit"
+    }
+  },
+  "lint-staged": {
+    "*.{js,jsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ],
+    "*.php": [
+      "cd suitecrm-integration && vendor/bin/phpcbf --standard=PSR12"
+    ]
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "api-gateway/**/*.js",
+      "cloud-burst/**/*.js",
+      "tests/**/*.js",
+      "!**/node_modules/**",
+      "!**/coverage/**",
+      "!**/dist/**"
+    ],
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "html"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/dist/",
+      "/build/"
+    ]
+  },
+  "nyc": {
+    "reporter": [
+      "text",
+      "html",
+      "lcov"
+    ],
+    "exclude": [
+      "coverage/**",
+      "test/**",
+      "tests/**",
+      "**/node_modules/**"
+    ]
+  }
+}
