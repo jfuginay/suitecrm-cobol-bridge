@@ -73,7 +73,7 @@ jobs:
           npm run test -- --coverage --watchAll=false
 
       - name: Upload Node.js coverage reports
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           files: |
             ./api-gateway/coverage/lcov.info
@@ -135,7 +135,7 @@ jobs:
           DB_PASSWORD: ${{ env.MYSQL_PASSWORD }}
 
       - name: Upload PHP coverage reports
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           files: ./suitecrm-integration/coverage.xml
           flags: php-unit-tests

@@ -164,7 +164,7 @@ jobs:
         npm test -- --coverage --coverageReporters=lcov --coverageReporters=text
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./${{ matrix.component }}/coverage/lcov.info
         flags: ${{ matrix.component }}
@@ -216,7 +216,7 @@ jobs:
         vendor/bin/phpunit --coverage-clover=coverage.xml
 
     - name: Upload PHP coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./suitecrm-integration/coverage.xml
         flags: php
