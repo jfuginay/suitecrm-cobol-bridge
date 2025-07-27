@@ -83,26 +83,113 @@ graph TD
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Docker & Docker Compose
-- 8GB RAM minimum
+- Docker Desktop (includes Docker & Docker Compose)
+- 8GB RAM minimum (16GB recommended)
 - 20GB disk space
+- Git installed
+- Ports 80, 3000-3006, 8080-8083, 9090 available
 
-### Installation
+### Installation (5 minutes)
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/yourusername/suitecrm-cobol-bridge.git
 cd suitecrm-cobol-bridge
 
-# Start all services
+# 2. Run the quick setup script
 ./start.sh
 
-# Access services
-# SuiteCRM: http://localhost:8080 (admin/admin)
-# Monitoring: http://localhost:8081
-# Rule Editor: http://localhost:8082
-# API Docs: http://localhost:3000/api-docs
+# 3. Wait for all services to be ready (about 2-3 minutes)
+# The script will show health check results
 ```
+
+### Access Points
+Once running, access these services:
+
+| Service | URL | Credentials | Purpose |
+|---------|-----|-------------|----------|
+| SuiteCRM | http://localhost:8080 | admin/admin | Main CRM interface |
+| Monitoring Dashboard | http://localhost:8081 | - | Real-time COBOL monitoring |
+| Business Rule Editor | http://localhost:8082 | - | Visual rule editing |
+| Time-Travel Debugger | http://localhost:8083 | - | Debug COBOL executions |
+| Cloud Burst Manager | http://localhost:3003 | - | Hybrid cloud management |
+| Mobile API | http://localhost:3001 | - | Mobile endpoints |
+| API Documentation | http://localhost:3000/api-docs | - | Interactive API docs |
+| Grafana Dashboards | http://localhost:3006 | admin/admin | System metrics |
+| Prometheus | http://localhost:9090 | - | Raw metrics |
+
+## 🎮 Testing All 6 Features - Step by Step
+
+### Feature 1: Real-Time Batch Job Monitoring
+1. **Navigate to**: http://localhost:8081
+2. **Start a demo job**:
+   ```bash
+   curl -X POST http://localhost:3000/api/cobol/execute \
+     -H "Content-Type: application/json" \
+     -d '{"program": "enhanced-financial-calc", "params": {"amount": 100000}}'
+   ```
+3. **What to see**:
+   - Live progress bar showing execution status
+   - Variable values updating in real-time
+   - CPU/Memory usage graphs
+   - Pause/Resume buttons
+
+### Feature 2: AI-Powered Code Review
+1. **Navigate to**: SuiteCRM > COBOL Programs module
+2. **Select**: Any COBOL program (e.g., "enhanced-financial-calc")
+3. **Click**: "AI Review" button
+4. **What to see**:
+   - Performance improvement suggestions
+   - Pattern analysis results
+   - Edge case warnings
+   - Generated test cases
+
+### Feature 3: Visual Business Rule Editor
+1. **Navigate to**: http://localhost:8082
+2. **Click**: "Extract Rules from COBOL"
+3. **Select**: Sample file (credit_calculator.cob)
+4. **What to see**:
+   - Decision tree visualization
+   - Drag-and-drop rule nodes
+   - Real-time COBOL preview
+   - Test case generator
+
+### Feature 4: Instant Mobile API Generation
+1. **Navigate to**: http://localhost:3001
+2. **Upload**: Any COBOL screen definition
+3. **Click**: "Generate Mobile Components"
+4. **What to see**:
+   - React Native component code
+   - TypeScript interfaces
+   - Field validation rules
+   - Offline sync configuration
+
+### Feature 5: Time-Travel Debugging
+1. **Navigate to**: http://localhost:8083
+2. **Run a program with debugging**:
+   ```bash
+   curl -X POST http://localhost:3000/api/cobol/execute \
+     -H "Content-Type: application/json" \
+     -d '{"program": "enhanced-financial-calc", "debug": true}'
+   ```
+3. **What to see**:
+   - Complete execution timeline
+   - Step-by-step variable states
+   - Ability to "travel" to any point
+   - Replay with modified inputs
+
+### Feature 6: Hybrid Cloud Burst
+1. **Navigate to**: http://localhost:3003
+2. **Simulate high load**:
+   ```bash
+   # Run the load simulation script
+   docker exec cobol-api-gateway node /app/simulate-load.js
+   ```
+3. **What to see**:
+   - Automatic cloud instance creation
+   - Job distribution dashboard
+   - Cost optimization in action
+   - Results merging back
 
 ## 📸 Screenshots
 
@@ -182,6 +269,56 @@ This project was developed for [Course Name] at [University Name], demonstrating
 3. Building real-time monitoring systems
 4. Creating developer tools and IDEs
 5. Designing for hybrid cloud deployment
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+1. **Services not starting**: 
+   - Check Docker is running: `docker ps`
+   - Check ports: `lsof -i :8080` (repeat for all ports)
+   - View logs: `docker-compose logs [service-name]`
+
+2. **COBOL compilation errors**:
+   - Check GnuCOBOL installation: `docker exec cobol-compiler cobc --version`
+   - Verify COBOL syntax in `cobol-core/` directory
+
+3. **Database connection issues**:
+   - Wait for MySQL to fully initialize (can take 30-60 seconds)
+   - Check credentials in `.env` file
+   - Run: `docker exec cobol-bridge-mysql mysql -u suitecrm -psuitecrm123 -e "SHOW DATABASES;"`
+
+4. **WebSocket connection failures**:
+   - Ensure no firewall blocking WebSocket ports
+   - Check browser console for errors
+   - Verify API Gateway is running: `curl http://localhost:3000/health`
+
+### Reset Everything
+```bash
+# Stop all services and remove volumes
+docker-compose down -v
+
+# Remove all images
+docker-compose rm -f
+
+# Start fresh
+./start.sh
+```
+
+## 🎯 Quick Demo Script
+
+For instructors wanting a quick walkthrough:
+
+```bash
+# 1. Start the system
+./start.sh
+
+# 2. Run the automated demo (shows all 6 features)
+docker exec cobol-api-gateway node /app/demo/run-all-features.js
+
+# 3. Or follow the interactive demo
+open demo/DEMO_SCRIPT.md
+```
 
 ## 🤝 Contributing
 

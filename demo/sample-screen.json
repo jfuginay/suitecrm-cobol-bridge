@@ -1,0 +1,164 @@
+{
+  "screenName": "CUSTOMER-INQUIRY",
+  "title": "Customer Account Inquiry",
+  "copybook": {
+    "01": {
+      "CUSTOMER-RECORD": {
+        "05": {
+          "CUST-ID": "PIC X(10)",
+          "CUST-NAME": "PIC X(30)",
+          "CUST-ADDRESS": {
+            "10": {
+              "STREET": "PIC X(30)",
+              "CITY": "PIC X(20)",
+              "STATE": "PIC XX",
+              "ZIP": "PIC 9(5)"
+            }
+          },
+          "CUST-PHONE": "PIC X(12)",
+          "CUST-EMAIL": "PIC X(40)",
+          "ACCOUNT-INFO": {
+            "10": {
+              "ACCOUNT-NUMBER": "PIC 9(10)",
+              "ACCOUNT-TYPE": "PIC X",
+              "BALANCE": "PIC S9(7)V99 COMP-3",
+              "CREDIT-LIMIT": "PIC 9(7)V99",
+              "LAST-PAYMENT-DATE": "PIC 9(8)",
+              "LAST-PAYMENT-AMT": "PIC 9(7)V99"
+            }
+          }
+        }
+      }
+    }
+  },
+  "fields": [
+    {
+      "name": "CUST-ID",
+      "label": "Customer ID",
+      "type": "text",
+      "required": true,
+      "validation": "alphanumeric",
+      "maxLength": 10
+    },
+    {
+      "name": "CUST-NAME",
+      "label": "Customer Name",
+      "type": "text",
+      "required": true,
+      "maxLength": 30
+    },
+    {
+      "name": "STREET",
+      "label": "Street Address",
+      "type": "text",
+      "required": false,
+      "maxLength": 30
+    },
+    {
+      "name": "CITY",
+      "label": "City",
+      "type": "text",
+      "required": false,
+      "maxLength": 20
+    },
+    {
+      "name": "STATE",
+      "label": "State",
+      "type": "select",
+      "required": false,
+      "options": ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA"]
+    },
+    {
+      "name": "ZIP",
+      "label": "ZIP Code",
+      "type": "text",
+      "required": false,
+      "validation": "numeric",
+      "maxLength": 5
+    },
+    {
+      "name": "CUST-PHONE",
+      "label": "Phone Number",
+      "type": "tel",
+      "required": false,
+      "validation": "phone"
+    },
+    {
+      "name": "CUST-EMAIL",
+      "label": "Email Address",
+      "type": "email",
+      "required": false,
+      "validation": "email"
+    },
+    {
+      "name": "ACCOUNT-NUMBER",
+      "label": "Account Number",
+      "type": "text",
+      "required": true,
+      "validation": "numeric",
+      "maxLength": 10
+    },
+    {
+      "name": "ACCOUNT-TYPE",
+      "label": "Account Type",
+      "type": "select",
+      "required": true,
+      "options": [
+        {"value": "C", "label": "Checking"},
+        {"value": "S", "label": "Savings"},
+        {"value": "L", "label": "Loan"},
+        {"value": "M", "label": "Mortgage"}
+      ]
+    },
+    {
+      "name": "BALANCE",
+      "label": "Current Balance",
+      "type": "currency",
+      "required": false,
+      "readOnly": true
+    },
+    {
+      "name": "CREDIT-LIMIT",
+      "label": "Credit Limit",
+      "type": "currency",
+      "required": false
+    }
+  ],
+  "actions": [
+    {
+      "name": "INQUIRE",
+      "label": "Search",
+      "type": "primary",
+      "cobolProgram": "CUSTINQ"
+    },
+    {
+      "name": "UPDATE",
+      "label": "Update",
+      "type": "secondary",
+      "cobolProgram": "CUSTUPD"
+    },
+    {
+      "name": "CLEAR",
+      "label": "Clear",
+      "type": "default"
+    }
+  ],
+  "layout": {
+    "type": "form",
+    "columns": 2,
+    "sections": [
+      {
+        "title": "Customer Information",
+        "fields": ["CUST-ID", "CUST-NAME", "CUST-PHONE", "CUST-EMAIL"]
+      },
+      {
+        "title": "Address",
+        "fields": ["STREET", "CITY", "STATE", "ZIP"]
+      },
+      {
+        "title": "Account Details",
+        "fields": ["ACCOUNT-NUMBER", "ACCOUNT-TYPE", "BALANCE", "CREDIT-LIMIT"]
+      }
+    ]
+  }
+}
